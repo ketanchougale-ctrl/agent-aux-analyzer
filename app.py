@@ -124,6 +124,12 @@ with st.sidebar:
     if aux_col == "— skip —":
         aux_col = None
 
+    skill_default = find_col(raw_df, ["skill name", "skillname", "skill", "queue name", "queue"])
+    skill_col  = st.selectbox("Skill Name Column (optional)", ["— skip —"] + cols,
+                               index=(_idx(skill_default) + 1) if skill_default else 0)
+    if skill_col == "— skip —":
+        skill_col = None
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Parse datetimes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -141,6 +147,19 @@ if df.empty:
 IST_OFFSET = timedelta(hours=5, minutes=30)
 df[login_col]  = df[login_col]  + IST_OFFSET
 df[logout_col] = df[logout_col] + IST_OFFSET
+
+# ── Derive AUX label ─────────────────────────────────────────────────────────
+def derive_aux_label(row):
+    aux_val   = str(row[aux_col]).strip()   if aux_col   and pd.notna(row[aux_col])   and str(row[aux_col]).strip()   != "" else ""
+    skill_val = str(row[skill_col]).strip() if skill_col and pd.notna(row[skill_col]) and str(row[skill_col]).strip() != "" else ""
+    if aux_val:
+        return aux_val
+    elif skill_val:
+        return "In Call - Working"
+    else:
+        return "Unavailable - Not Working"
+
+df["_aux_label"] = df.apply(derive_aux_label, axis=1)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Query controls
@@ -228,6 +247,7 @@ else:
     st.markdown("#### 📄 Detailed Records")
 
     show_df = result_df.drop(columns=["_eff_start", "_eff_end", "_overlap_sec", "_overlap_min"]).copy()
+    show_df = show_df.rename(columns={"_aux_label": "AUX Label"})
 
     # Add human-readable overlap columns
     show_df.insert(
@@ -253,19 +273,15 @@ else:
     st.dataframe(show_df, use_container_width=True, hide_index=True)
 
     # ── AUX Breakdown ─────────────────────────────────────────────────────────
-    if aux_col:
+    if aux_col or skill_col:
         st.write("")
         st.markdown("#### 📊 AUX Breakdown in Slot")
 
-        aux_label = result_df[aux_col].fillna("(Available / Handling)")
-        aux_label = aux_label.replace("", "(Available / Handling)")
-
         summary = (
-            result_df.assign(_aux=aux_label)
-            .groupby("_aux")["_overlap_sec"]
+            result_df.groupby("_aux_label")["_overlap_sec"]
             .sum()
             .reset_index()
-            .rename(columns={"_aux": "AUX Code", "_overlap_sec": "Seconds"})
+            .rename(columns={"_aux_label": "AUX Code", "_overlap_sec": "Seconds"})
             .sort_values("Seconds", ascending=False)
         )
         summary["Duration (HH:MM:SS)"] = summary["Seconds"].apply(fmt_duration)
@@ -306,10 +322,7 @@ else:
 
     timeline_rows = []
     for _, row in result_df.iterrows():
-        label = (
-            str(row[aux_col]) if aux_col and pd.notna(row[aux_col]) and str(row[aux_col]) != ""
-            else "(Available / Handling)"
-        )
+        label = row["_aux_label"]
         timeline_rows.append(
             {
                 "AUX": label,
@@ -352,7 +365,7 @@ else:
     out_buf = io.BytesIO()
     with pd.ExcelWriter(out_buf, engine="openpyxl") as writer:
         show_df.to_excel(writer, sheet_name="Filtered Records", index=False)
-        if aux_col:
+        if aux_col or skill_col:
             summary[["AUX Code", "Duration (HH:MM:SS)", "Minutes", "% of Slot"]].to_excel(
                 writer, sheet_name="AUX Summary", index=False
             )
@@ -379,19 +392,17 @@ with st.expander(f"🗓️ Full Day View — {sel_agent}  ({sel_date.strftime('%
         for dc in [login_col, logout_col]:
             day_show[dc] = day_show[dc].dt.strftime("%m/%d/%Y %H:%M:%S")
         day_show = day_show.rename(columns={
-            login_col:  f"{login_col} (IST)",
-            logout_col: f"{logout_col} (IST)",
+            login_col:    f"{login_col} (IST)",
+            logout_col:   f"{logout_col} (IST)",
+            "_aux_label": "AUX Label",
         })
         st.dataframe(day_show, use_container_width=True, hide_index=True)
 
         # Full-day timeline
-        if aux_col:
+        if aux_col or skill_col:
             fd_rows = []
             for _, row in day_df.iterrows():
-                label = (
-                    str(row[aux_col]) if pd.notna(row[aux_col]) and str(row[aux_col]) != ""
-                    else "(Available / Handling)"
-                )
+                label = row["_aux_label"]
                 fd_rows.append({"AUX": label, "Start": row[login_col], "Finish": row[logout_col]})
 
             fd_tl = pd.DataFrame(fd_rows).sort_values("Start")
