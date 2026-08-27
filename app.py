@@ -43,7 +43,8 @@ st.markdown(
 st.markdown('<div class="main-title">📊 CS Agent AUX Code Analyzer</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sub-title">Dynamically explore which AUX codes any agent was on during any time slot, '
-    "with exact overlap durations and visual breakdowns.</div>",
+    "with exact overlap durations and visual breakdowns. "
+    "<strong>All dates &amp; times are displayed in IST (UTC+5:30).</strong></div>",
     unsafe_allow_html=True,
 )
 
@@ -99,6 +100,7 @@ with st.sidebar:
 
     raw_df = load_file(uploaded.read(), uploaded.name)
     st.success(f"✅ {len(raw_df):,} rows loaded")
+    st.info("🕐 UTC → IST (+5:30) conversion applied")
 
     st.divider()
     st.subheader("🗂️ Column Mapping")
@@ -135,6 +137,11 @@ if df.empty:
     st.error("No valid rows remain after parsing datetimes. Check your column mapping.")
     st.stop()
 
+# ── UTC → IST conversion (UTC+5:30) ──────────────────────────────────────────
+IST_OFFSET = timedelta(hours=5, minutes=30)
+df[login_col]  = df[login_col]  + IST_OFFSET
+df[logout_col] = df[logout_col] + IST_OFFSET
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Query controls
 # ──────────────────────────────────────────────────────────────────────────────
@@ -152,16 +159,16 @@ agent_df = df[df[agent_col] == sel_agent].copy()
 with qc2:
     avail_dates = sorted(agent_df[login_col].dt.date.unique())
     sel_date = st.selectbox(
-        "📅 Date",
+        "📅 Date (IST)",
         avail_dates,
         format_func=lambda d: d.strftime("%a, %b %d %Y"),
     )
 
 with qc3:
-    slot_start = st.time_input("⏰ From", value=time(13, 0))
+    slot_start = st.time_input("⏰ From (IST)", value=time(13, 0))
 
 with qc4:
-    slot_end = st.time_input("⏰ To", value=time(14, 0))
+    slot_end = st.time_input("⏰ To (IST)", value=time(14, 0))
 
 if slot_start >= slot_end:
     st.error("'From' time must be earlier than 'To' time.")
@@ -198,7 +205,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.caption(
-    f"Time slot: **{slot_start.strftime('%H:%M')}** → **{slot_end.strftime('%H:%M')}** "
+    f"Time slot (IST): **{slot_start.strftime('%H:%M')}** → **{slot_end.strftime('%H:%M')}** "
     f"on **{sel_date.strftime('%A, %B %d, %Y')}**"
 )
 
@@ -225,19 +232,23 @@ else:
     # Add human-readable overlap columns
     show_df.insert(
         show_df.columns.get_loc(login_col) + 1,
-        "Slot Effective Start",
+        "Slot Effective Start (IST)",
         result_df["_eff_start"].dt.strftime("%H:%M:%S"),
     )
     show_df.insert(
         show_df.columns.get_loc(logout_col) + 1,
-        "Slot Effective End",
+        "Slot Effective End (IST)",
         result_df["_eff_end"].dt.strftime("%H:%M:%S"),
     )
     show_df["Time in Slot (HH:MM:SS)"] = result_df["_overlap_sec"].apply(fmt_duration)
 
-    # Format datetime cols for readability
+    # Format datetime cols for readability and rename to show IST
     for dc in [login_col, logout_col]:
         show_df[dc] = show_df[dc].dt.strftime("%m/%d/%Y %H:%M:%S")
+    show_df = show_df.rename(columns={
+        login_col:  f"{login_col} (IST)",
+        logout_col: f"{logout_col} (IST)",
+    })
 
     st.dataframe(show_df, use_container_width=True, hide_index=True)
 
@@ -277,7 +288,7 @@ else:
                     pie_data,
                     values="Seconds",
                     names="AUX Code",
-                    title=f"AUX Distribution  {slot_start.strftime('%H:%M')}–{slot_end.strftime('%H:%M')}",
+                    title=f"AUX Distribution  {slot_start.strftime('%H:%M')}–{slot_end.strftime('%H:%M')} IST",
                     hole=0.42,
                     color_discrete_sequence=px.colors.qualitative.Set2,
                 )
@@ -319,12 +330,12 @@ else:
             y="AUX",
             color="AUX",
             color_discrete_sequence=px.colors.qualitative.Set2,
-            title=f"Agent Timeline: {sel_agent}",
+            title=f"Agent Timeline: {sel_agent}  (IST)",
         )
         fig_gantt.update_xaxes(
             range=[q_start, q_end],
             tickformat="%H:%M",
-            title="Time",
+            title="Time (IST)",
         )
         fig_gantt.update_yaxes(title="")
         fig_gantt.update_layout(
@@ -367,6 +378,10 @@ with st.expander(f"🗓️ Full Day View — {sel_agent}  ({sel_date.strftime('%
         day_show = day_df.copy()
         for dc in [login_col, logout_col]:
             day_show[dc] = day_show[dc].dt.strftime("%m/%d/%Y %H:%M:%S")
+        day_show = day_show.rename(columns={
+            login_col:  f"{login_col} (IST)",
+            logout_col: f"{logout_col} (IST)",
+        })
         st.dataframe(day_show, use_container_width=True, hide_index=True)
 
         # Full-day timeline
@@ -388,9 +403,9 @@ with st.expander(f"🗓️ Full Day View — {sel_agent}  ({sel_date.strftime('%
                     y="AUX",
                     color="AUX",
                     color_discrete_sequence=px.colors.qualitative.Set2,
-                    title="Full Day Activity",
+                    title="Full Day Activity (IST)",
                 )
-                fig_fd.update_xaxes(tickformat="%H:%M", title="Time")
+                fig_fd.update_xaxes(tickformat="%H:%M", title="Time (IST)")
                 fig_fd.update_yaxes(title="")
                 fig_fd.update_layout(
                     height=max(300, 60 + 45 * fd_tl["AUX"].nunique()),
