@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent AUX Analyzer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #13131f;
+      --surface:   #1e1e2e;
+      --border:    rgba(255,255,255,0.08);
+      --text:      #e2e2f0;
+      --muted:     #8888aa;
+      --accent:    #4f8ef7;
+      --accent-h:  #6aa3ff;
+      --green:     #3ecf8e;
+      --red:       #f7706a;
+      --radius:    10px;
+    }
+
+    body {
+      width: 310px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      padding: 0;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .icon-wrap {
+      width: 38px; height: 38px;
+      background: var(--accent);
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .app-name  { font-size: 14px; font-weight: 700; color: var(--text); }
+    .app-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    /* ── Status pill ── */
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .status-label { color: var(--muted); font-size: 12px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .pill-checking { background: rgba(255,200,50,0.15); color: #f5c842; }
+    .pill-online   { background: rgba(62,207,142,0.15); color: var(--green); }
+    .pill-offline  { background: rgba(247,112,106,0.15); color: var(--red); }
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: none;
+    }
+    .pulse { animation: pulse 1.4s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.3; }
+    }
+
+    /* ── Main button ── */
+    .btn-wrap { padding: 14px 16px 10px; }
+    .btn-open {
+      width: 100%;
+      padding: 10px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-open:hover  { background: var(--accent-h); }
+    .btn-open:active { transform: scale(0.97); }
+    .btn-open:disabled {
+      background: rgba(79,142,247,0.3);
+      cursor: not-allowed;
+    }
+
+    /* ── Info card ── */
+    .info-card {
+      margin: 0 16px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+    }
+    .info-card .row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px;
+      padding: 4px 0;
+    }
+    .info-card .row:not(:last-child) {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 7px;
+      margin-bottom: 3px;
+    }
+    .info-key   { color: var(--muted); font-size: 11px; }
+    .info-val   { color: var(--text);  font-size: 11px; font-weight: 500; font-family: monospace; }
+
+    /* ── Start instructions ── */
+    .alert {
+      margin: 0 16px 14px;
+      background: rgba(247,112,106,0.08);
+      border: 1px solid rgba(247,112,106,0.25);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      color: #f7a0a0;
+      font-size: 11px;
+      line-height: 1.6;
+      display: none;
+    }
+    .alert code {
+      display: block;
+      margin-top: 6px;
+      background: rgba(0,0,0,0.3);
+      padding: 5px 8px;
+      border-radius: 5px;
+      color: #e2e2f0;
+      font-size: 10.5px;
+      word-break: break-all;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 8px 16px 12px;
+      color: var(--muted);
+      font-size: 10px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="icon-wrap">📊</div>
+    <div>
+      <div class="app-name">Agent AUX Analyzer</div>
+      <div class="app-sub">CS Agent AUX Code Explorer</div>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-row">
+    <span class="status-label">Server status</span>
+    <span class="pill pill-checking" id="pill">
+      <span class="dot pulse"></span>
+      <span id="pill-text">Checking…</span>
+    </span>
+  </div>
+
+  <!-- Open button -->
+  <div class="btn-wrap">
+    <button class="btn-open" id="btnOpen">
+      <span>🚀</span> Open AUX Analyzer
+    </button>
+  </div>
+
+  <!-- Info card -->
+  <div class="info-card">
+    <div class="row">
+      <span class="info-key">URL</span>
+      <span class="info-val">localhost:8501</span>
+    </div>
+    <div class="row">
+      <span class="info-key">Framework</span>
+      <span class="info-val">Streamlit</span>
+    </div>
+    <div class="row">
+      <span class="info-key">Version</span>
+      <span class="info-val">1.0</span>
+    </div>
+  </div>
+
+  <!-- Start instructions (shown when server is offline) -->
+  <div class="alert" id="alertOffline">
+    ⚠️ Server not detected. Start it from your project folder:
+    <code>streamlit run app.py --server.port 8501 --server.headless true</code>
+  </div>
+
+  <div class="footer">Agent AUX Analyzer · CS Operations Tool</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

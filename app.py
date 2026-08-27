@@ -1,0 +1,409 @@
+import streamlit as st
+import pandas as pd
+import io
+import plotly.express as px
+from datetime import datetime, date, time, timedelta
+
+st.set_page_config(
+    page_title="Agent AUX Analyzer",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Styling
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+        .block-container { padding-top: 1.5rem; }
+        .main-title {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.2rem;
+        }
+        .sub-title {
+            font-size: 0.95rem;
+            opacity: 0.65;
+            margin-bottom: 1.5rem;
+        }
+        .section-header {
+            font-size: 1.2rem;
+            font-weight: 600;
+            border-bottom: 2px solid rgba(128,128,128,0.35);
+            padding-bottom: 4px;
+            margin-top: 1rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div class="main-title">📊 CS Agent AUX Code Analyzer</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-title">Dynamically explore which AUX codes any agent was on during any time slot, '
+    "with exact overlap durations and visual breakdowns.</div>",
+    unsafe_allow_html=True,
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def fmt_duration(seconds: float) -> str:
+    """Format seconds to HH:MM:SS string."""
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    """Case-insensitive column lookup from a list of candidate names."""
+    lookup = {c.lower().strip().replace(" ", ""): c for c in df.columns}
+    for cand in candidates:
+        key = cand.lower().replace(" ", "")
+        if key in lookup:
+            return lookup[key]
+    return None
+
+
+@st.cache_data(show_spinner="Loading file…")
+def load_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
+    if file_name.lower().endswith(".csv"):
+        return pd.read_csv(io.BytesIO(file_bytes))
+    return pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+
+
+def parse_datetimes(df: pd.DataFrame, login_col: str, logout_col: str) -> pd.DataFrame:
+    df = df.copy()
+    df[login_col]  = pd.to_datetime(df[login_col],  errors="coerce", dayfirst=False)
+    df[logout_col] = pd.to_datetime(df[logout_col], errors="coerce", dayfirst=False)
+    bad = df[login_col].isna() | df[logout_col].isna() | (df[login_col] > df[logout_col])
+    if bad.any():
+        st.sidebar.warning(f"⚠️ Skipping {bad.sum()} rows with invalid/missing datetimes.")
+    df = df[~bad].reset_index(drop=True)
+    return df
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Sidebar – File upload & column mapping
+# ──────────────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.header("📁 Data Source")
+    uploaded = st.file_uploader("Upload Excel or CSV", type=["xlsx", "xls", "csv"])
+
+    if uploaded is None:
+        st.info("Upload a file to begin.")
+        st.stop()
+
+    raw_df = load_file(uploaded.read(), uploaded.name)
+    st.success(f"✅ {len(raw_df):,} rows loaded")
+
+    st.divider()
+    st.subheader("🗂️ Column Mapping")
+    st.caption("Auto-detected from common names – adjust if needed.")
+
+    cols = list(raw_df.columns)
+
+    def _idx(col): return cols.index(col) if col else 0
+
+    agent_default  = find_col(raw_df, ["agent name", "agentname", "agent"])
+    login_default  = find_col(raw_df, ["login date", "logindate", "start time", "starttime", "start date", "startdate"])
+    logout_default = find_col(raw_df, ["logout date", "logoutdate", "end time", "endtime", "end date", "enddate"])
+    aux_default    = find_col(raw_df, ["unavailable code", "unavailablecode", "aux code", "auxcode", "status code"])
+    dur_default    = find_col(raw_df, ["duration"])
+
+    agent_col  = st.selectbox("Agent Name",          cols, index=_idx(agent_default))
+    login_col  = st.selectbox("Login / Start Time",  cols, index=_idx(login_default))
+    logout_col = st.selectbox("Logout / End Time",   cols, index=_idx(logout_default))
+    aux_col    = st.selectbox("AUX / Unavailable Code (optional)", ["— skip —"] + cols,
+                               index=(_idx(aux_default) + 1) if aux_default else 0)
+    if aux_col == "— skip —":
+        aux_col = None
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parse datetimes
+# ──────────────────────────────────────────────────────────────────────────────
+try:
+    df = parse_datetimes(raw_df, login_col, logout_col)
+except Exception as exc:
+    st.error(f"Could not parse datetime columns: {exc}")
+    st.stop()
+
+if df.empty:
+    st.error("No valid rows remain after parsing datetimes. Check your column mapping.")
+    st.stop()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Query controls
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown('<div class="section-header">🔍 Query Parameters</div>', unsafe_allow_html=True)
+st.write("")
+
+qc1, qc2, qc3, qc4 = st.columns([3, 2, 1.5, 1.5])
+
+with qc1:
+    agents = sorted(df[agent_col].dropna().unique().tolist())
+    sel_agent = st.selectbox("👤 Agent", agents)
+
+agent_df = df[df[agent_col] == sel_agent].copy()
+
+with qc2:
+    avail_dates = sorted(agent_df[login_col].dt.date.unique())
+    sel_date = st.selectbox(
+        "📅 Date",
+        avail_dates,
+        format_func=lambda d: d.strftime("%a, %b %d %Y"),
+    )
+
+with qc3:
+    slot_start = st.time_input("⏰ From", value=time(13, 0))
+
+with qc4:
+    slot_end = st.time_input("⏰ To", value=time(14, 0))
+
+if slot_start >= slot_end:
+    st.error("'From' time must be earlier than 'To' time.")
+    st.stop()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Overlap filtering logic
+# ──────────────────────────────────────────────────────────────────────────────
+q_start = datetime.combine(sel_date, slot_start)
+q_end   = datetime.combine(sel_date, slot_end)
+
+# All rows for that agent on that date
+day_df = agent_df[agent_df[login_col].dt.date == sel_date].copy()
+
+# Overlap condition: row interval intersects [q_start, q_end]
+overlap_mask = (day_df[login_col] < q_end) & (day_df[logout_col] > q_start)
+result_df = day_df[overlap_mask].copy()
+
+if not result_df.empty:
+    # Effective (clipped) times within the queried slot
+    result_df["_eff_start"] = result_df[login_col].clip(lower=q_start, upper=q_end)
+    result_df["_eff_end"]   = result_df[logout_col].clip(lower=q_start, upper=q_end)
+    result_df["_overlap_sec"] = (
+        result_df["_eff_end"] - result_df["_eff_start"]
+    ).dt.total_seconds()
+    result_df["_overlap_min"] = result_df["_overlap_sec"] / 60
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Display results
+# ──────────────────────────────────────────────────────────────────────────────
+st.divider()
+st.markdown(
+    f'<div class="section-header">📋 Results — {sel_agent}</div>',
+    unsafe_allow_html=True,
+)
+st.caption(
+    f"Time slot: **{slot_start.strftime('%H:%M')}** → **{slot_end.strftime('%H:%M')}** "
+    f"on **{sel_date.strftime('%A, %B %d, %Y')}**"
+)
+
+if result_df.empty:
+    st.warning("No AUX records overlap the selected time slot for this agent on this date.")
+else:
+    slot_total_sec = (q_end - q_start).total_seconds()
+    total_overlap_sec = result_df["_overlap_sec"].sum()
+
+    # ── Metrics ──────────────────────────────────────────────────────────────
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Matching Records", len(result_df))
+    m2.metric("Total AUX Time in Slot", fmt_duration(total_overlap_sec))
+    m3.metric("Slot Duration", fmt_duration(slot_total_sec))
+    m4.metric("Slot Coverage", f"{total_overlap_sec / slot_total_sec * 100:.1f}%")
+
+    st.write("")
+
+    # ── Detailed table ────────────────────────────────────────────────────────
+    st.markdown("#### 📄 Detailed Records")
+
+    show_df = result_df.drop(columns=["_eff_start", "_eff_end", "_overlap_sec", "_overlap_min"]).copy()
+
+    # Add human-readable overlap columns
+    show_df.insert(
+        show_df.columns.get_loc(login_col) + 1,
+        "Slot Effective Start",
+        result_df["_eff_start"].dt.strftime("%H:%M:%S"),
+    )
+    show_df.insert(
+        show_df.columns.get_loc(logout_col) + 1,
+        "Slot Effective End",
+        result_df["_eff_end"].dt.strftime("%H:%M:%S"),
+    )
+    show_df["Time in Slot (HH:MM:SS)"] = result_df["_overlap_sec"].apply(fmt_duration)
+
+    # Format datetime cols for readability
+    for dc in [login_col, logout_col]:
+        show_df[dc] = show_df[dc].dt.strftime("%m/%d/%Y %H:%M:%S")
+
+    st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+    # ── AUX Breakdown ─────────────────────────────────────────────────────────
+    if aux_col:
+        st.write("")
+        st.markdown("#### 📊 AUX Breakdown in Slot")
+
+        aux_label = result_df[aux_col].fillna("(Available / Handling)")
+        aux_label = aux_label.replace("", "(Available / Handling)")
+
+        summary = (
+            result_df.assign(_aux=aux_label)
+            .groupby("_aux")["_overlap_sec"]
+            .sum()
+            .reset_index()
+            .rename(columns={"_aux": "AUX Code", "_overlap_sec": "Seconds"})
+            .sort_values("Seconds", ascending=False)
+        )
+        summary["Duration (HH:MM:SS)"] = summary["Seconds"].apply(fmt_duration)
+        summary["Minutes"] = (summary["Seconds"] / 60).round(2)
+        summary["% of Slot"] = (summary["Seconds"] / slot_total_sec * 100).round(1)
+
+        sc1, sc2 = st.columns([1, 1.5])
+
+        with sc1:
+            st.dataframe(
+                summary[["AUX Code", "Duration (HH:MM:SS)", "% of Slot"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        with sc2:
+            pie_data = summary[summary["Seconds"] > 0]
+            if not pie_data.empty:
+                fig_pie = px.pie(
+                    pie_data,
+                    values="Seconds",
+                    names="AUX Code",
+                    title=f"AUX Distribution  {slot_start.strftime('%H:%M')}–{slot_end.strftime('%H:%M')}",
+                    hole=0.42,
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                )
+                fig_pie.update_traces(textinfo="label+percent", pull=[0.03] * len(pie_data))
+                fig_pie.update_layout(
+                    height=320,
+                    margin=dict(t=40, b=10, l=10, r=10),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+    # ── Timeline / Gantt ──────────────────────────────────────────────────────
+    st.write("")
+    st.markdown("#### ⏱️ Activity Timeline (within slot)")
+
+    timeline_rows = []
+    for _, row in result_df.iterrows():
+        label = (
+            str(row[aux_col]) if aux_col and pd.notna(row[aux_col]) and str(row[aux_col]) != ""
+            else "(Available / Handling)"
+        )
+        timeline_rows.append(
+            {
+                "AUX": label,
+                "Start": row["_eff_start"],
+                "Finish": row["_eff_end"],
+            }
+        )
+
+    tl_df = pd.DataFrame(timeline_rows)
+
+    if not tl_df.empty:
+        # Sort so stacking looks sensible
+        tl_df = tl_df.sort_values("Start")
+        fig_gantt = px.timeline(
+            tl_df,
+            x_start="Start",
+            x_end="Finish",
+            y="AUX",
+            color="AUX",
+            color_discrete_sequence=px.colors.qualitative.Set2,
+            title=f"Agent Timeline: {sel_agent}",
+        )
+        fig_gantt.update_xaxes(
+            range=[q_start, q_end],
+            tickformat="%H:%M",
+            title="Time",
+        )
+        fig_gantt.update_yaxes(title="")
+        fig_gantt.update_layout(
+            height=max(280, 60 + 45 * tl_df["AUX"].nunique()),
+            showlegend=False,
+            margin=dict(t=40, b=30, l=10, r=10),
+        )
+        st.plotly_chart(fig_gantt, use_container_width=True)
+
+    # ── Export ────────────────────────────────────────────────────────────────
+    st.write("")
+    st.markdown("#### 💾 Export")
+
+    out_buf = io.BytesIO()
+    with pd.ExcelWriter(out_buf, engine="openpyxl") as writer:
+        show_df.to_excel(writer, sheet_name="Filtered Records", index=False)
+        if aux_col:
+            summary[["AUX Code", "Duration (HH:MM:SS)", "Minutes", "% of Slot"]].to_excel(
+                writer, sheet_name="AUX Summary", index=False
+            )
+
+    file_label = (
+        f"AUX_{sel_agent.replace(' ', '_').replace(',', '')}_{sel_date}"
+        f"_{slot_start.strftime('%H%M')}-{slot_end.strftime('%H%M')}.xlsx"
+    )
+    st.download_button(
+        "📥 Download Results (Excel)",
+        data=out_buf.getvalue(),
+        file_name=file_label,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Full-day context (collapsible)
+# ──────────────────────────────────────────────────────────────────────────────
+with st.expander(f"🗓️ Full Day View — {sel_agent}  ({sel_date.strftime('%b %d, %Y')})", expanded=False):
+    if day_df.empty:
+        st.write("No records for this agent on the selected date.")
+    else:
+        day_show = day_df.copy()
+        for dc in [login_col, logout_col]:
+            day_show[dc] = day_show[dc].dt.strftime("%m/%d/%Y %H:%M:%S")
+        st.dataframe(day_show, use_container_width=True, hide_index=True)
+
+        # Full-day timeline
+        if aux_col:
+            fd_rows = []
+            for _, row in day_df.iterrows():
+                label = (
+                    str(row[aux_col]) if pd.notna(row[aux_col]) and str(row[aux_col]) != ""
+                    else "(Available / Handling)"
+                )
+                fd_rows.append({"AUX": label, "Start": row[login_col], "Finish": row[logout_col]})
+
+            fd_tl = pd.DataFrame(fd_rows).sort_values("Start")
+            if not fd_tl.empty:
+                fig_fd = px.timeline(
+                    fd_tl,
+                    x_start="Start",
+                    x_end="Finish",
+                    y="AUX",
+                    color="AUX",
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                    title="Full Day Activity",
+                )
+                fig_fd.update_xaxes(tickformat="%H:%M", title="Time")
+                fig_fd.update_yaxes(title="")
+                fig_fd.update_layout(
+                    height=max(300, 60 + 45 * fd_tl["AUX"].nunique()),
+                    showlegend=False,
+                    margin=dict(t=40, b=30, l=10, r=10),
+                )
+                # Highlight the queried slot with a shaded rectangle
+                fig_fd.add_vrect(
+                    x0=q_start, x1=q_end,
+                    fillcolor="rgba(21, 101, 192, 0.12)",
+                    line_width=1,
+                    line_color="rgba(21, 101, 192, 0.6)",
+                    annotation_text=f"Queried slot",
+                    annotation_position="top left",
+                )
+                st.plotly_chart(fig_fd, use_container_width=True)
