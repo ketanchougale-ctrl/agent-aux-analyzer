@@ -23,6 +23,9 @@ env/
 *.xls
 *.csv
 
+# Local file cache (persists uploaded files across sessions)
+.file_cache/
+
 # OS
 .DS_Store
 Thumbs.db

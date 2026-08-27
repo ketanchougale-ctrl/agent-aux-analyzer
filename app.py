@@ -1,4 +1,5 @@
 import re
+import pathlib
 import streamlit as st
 import pandas as pd
 import io
@@ -94,6 +95,31 @@ def parse_time_slot(slot_str: str):
     return (s_time, e_time) if s_time and e_time else None
 
 
+# ── Disk-based file cache (survives new browser sessions) ───────────────────
+_CACHE_DIR = pathlib.Path(".file_cache")
+_CACHE_DIR.mkdir(exist_ok=True)
+
+
+def _save_to_disk(key: str, file_bytes: bytes, file_name: str) -> None:
+    (_CACHE_DIR / f"{key}.bin").write_bytes(file_bytes)
+    (_CACHE_DIR / f"{key}.name").write_text(file_name, encoding="utf-8")
+
+
+def _load_from_disk(key: str):
+    b_path = _CACHE_DIR / f"{key}.bin"
+    n_path = _CACHE_DIR / f"{key}.name"
+    if b_path.exists() and n_path.exists():
+        return b_path.read_bytes(), n_path.read_text(encoding="utf-8")
+    return None, None
+
+
+def _clear_from_disk(key: str) -> None:
+    for suffix in (".bin", ".name"):
+        p = _CACHE_DIR / f"{key}{suffix}"
+        if p.exists():
+            p.unlink()
+
+
 WORKING_AUX: set[str] = {
     "outboundpending",
     "callbackpending",
@@ -144,8 +170,16 @@ with st.sidebar:
     uploaded = st.file_uploader("Upload Excel or CSV", type=["xlsx", "xls", "csv"])
 
     if uploaded is not None:
-        st.session_state["login_bytes"] = uploaded.read()
+        _b = uploaded.read()
+        _save_to_disk("login", _b, uploaded.name)
+        st.session_state["login_bytes"] = _b
         st.session_state["login_name"]  = uploaded.name
+
+    if "login_bytes" not in st.session_state:
+        _b, _n = _load_from_disk("login")
+        if _b is not None:
+            st.session_state["login_bytes"] = _b
+            st.session_state["login_name"]  = _n
 
     if "login_bytes" not in st.session_state:
         st.info("Upload a file to begin.")
@@ -153,6 +187,7 @@ with st.sidebar:
 
     st.caption(f"📄 **{st.session_state['login_name']}**")
     if st.button("🗑️ Clear login file", key="clear_login"):
+        _clear_from_disk("login")
         st.session_state.pop("login_bytes", None)
         st.session_state.pop("login_name",  None)
         st.rerun()
@@ -513,12 +548,21 @@ sched_file = st.file_uploader(
 )
 
 if sched_file is not None:
-    st.session_state["sched_bytes"] = sched_file.read()
+    _sb = sched_file.read()
+    _save_to_disk("sched", _sb, sched_file.name)
+    st.session_state["sched_bytes"] = _sb
     st.session_state["sched_name"]  = sched_file.name
+
+if "sched_bytes" not in st.session_state:
+    _sb, _sn = _load_from_disk("sched")
+    if _sb is not None:
+        st.session_state["sched_bytes"] = _sb
+        st.session_state["sched_name"]  = _sn
 
 if "sched_bytes" in st.session_state:
     sc1, sc2 = st.columns([1, 3])
     if sc1.button("🗑️ Clear schedule file", key="clear_sched"):
+        _clear_from_disk("sched")
         st.session_state.pop("sched_bytes", None)
         st.session_state.pop("sched_name",  None)
         st.rerun()
