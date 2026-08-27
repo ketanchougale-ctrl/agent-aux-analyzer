@@ -674,19 +674,21 @@ if sched_file is not None:
 
                 # ── Compliance % per agent ────────────────────────────────────
                 if len(non_wo) > 0:
-                    agent_summary = (
-                        non_wo.groupby("Agent Name")["Status"]
-                        .apply(lambda s: pd.Series({
-                            "Scheduled Days":  len(s),
-                            "✅ On Calls":      (s.str.startswith("✅")).sum(),
-                            "⚠️ No Calls":      (s.str.startswith("⚠️")).sum(),
-                            "❌ Not Logged In": (s.str.startswith("❌")).sum(),
-                        }))
-                        .reset_index()
-                    )
-                    agent_summary["Compliance %"] = (
-                        agent_summary["✅ On Calls"] / agent_summary["Scheduled Days"] * 100
-                    ).round(1).astype(str) + "%"
+                    _stats = []
+                    for _agent, _grp in non_wo.groupby("Agent Name"):
+                        _tot = len(_grp)
+                        _on  = int(_grp["Status"].str.startswith("✅").sum())
+                        _nc  = int(_grp["Status"].str.startswith("⚠️").sum())
+                        _ni  = int(_grp["Status"].str.startswith("❌").sum())
+                        _stats.append({
+                            "Agent Name":      _agent,
+                            "Scheduled Days":  _tot,
+                            "✅ On Calls":      _on,
+                            "⚠️ No Calls":      _nc,
+                            "❌ Not Logged In": _ni,
+                            "Compliance %":    f"{_on / _tot * 100:.1f}%" if _tot > 0 else "0.0%",
+                        })
+                    agent_summary = pd.DataFrame(_stats)
 
                     st.markdown("##### Agent Summary")
                     st.dataframe(agent_summary, use_container_width=True, hide_index=True)
