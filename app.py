@@ -546,6 +546,7 @@ if sched_file is not None:
             _wd_to_dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
             records = []
+            out_records = []
             total_ops = max(len(sched_raw) * len(check_dates), 1)
             prog = st.progress(0.0, text="Generating report…")
             done = 0
@@ -583,6 +584,21 @@ if sched_file is not None:
                             "Total Active in Slot": "-",
                             "AUX Breakdown":        "-",
                         })
+                        wo_rows = agent_login[agent_login[login_col].dt.date == check_date]
+                        for _, lrow in wo_rows.iterrows():
+                            _ds = max(0, (lrow[logout_col] - lrow[login_col]).total_seconds())
+                            if _ds > 0:
+                                out_records.append({
+                                    "Agent Name":          sched_agent,
+                                    "Date (IST)":          check_date.strftime("%d-%b-%Y"),
+                                    "Day":                 dow_short,
+                                    "Scheduled Slot":      "Week Off",
+                                    "Login Time (IST)":    lrow[login_col].strftime("%H:%M"),
+                                    "Logout Time (IST)":   lrow[logout_col].strftime("%H:%M"),
+                                    "AUX Code":            lrow["_aux_label"],
+                                    "Duration":            fmt_duration(_ds),
+                                    "Type":                "Week Off - Logged In",
+                                })
 
                     else:
                         parsed = parse_time_slot(slot_str)
@@ -605,6 +621,37 @@ if sched_file is not None:
                             overlap  = day_rows[
                                 (day_rows[login_col] < q_e) & (day_rows[logout_col] > q_s)
                             ].copy()
+
+                            for _, lrow in day_rows.iterrows():
+                                _lt  = lrow[login_col]
+                                _lo  = lrow[logout_col]
+                                _tot = max(0, (_lo - _lt).total_seconds())
+                                _es  = max(_lt, q_s)
+                                _ee  = min(_lo, q_e)
+                                _in  = max(0, (_ee - _es).total_seconds()) if _ee > _es else 0
+                                _out = _tot - _in
+                                if _out > 0:
+                                    if _lt < q_s and _lo <= q_s:
+                                        _otype = "Before Slot"
+                                    elif _lt >= q_e:
+                                        _otype = "After Slot"
+                                    elif _lt < q_s and _lo > q_e:
+                                        _otype = "Before & After Slot"
+                                    elif _lt < q_s:
+                                        _otype = "Partially Before Slot"
+                                    else:
+                                        _otype = "Partially After Slot"
+                                    out_records.append({
+                                        "Agent Name":           sched_agent,
+                                        "Date (IST)":           check_date.strftime("%d-%b-%Y"),
+                                        "Day":                  dow_short,
+                                        "Scheduled Slot":       slot_str,
+                                        "Login Time (IST)":     _lt.strftime("%H:%M"),
+                                        "Logout Time (IST)":    _lo.strftime("%H:%M"),
+                                        "AUX Code":             lrow["_aux_label"],
+                                        "Out-of-Slot Duration": fmt_duration(_out),
+                                        "Type":                 _otype,
+                                    })
 
                             if overlap.empty:
                                 records.append({
@@ -697,12 +744,34 @@ if sched_file is not None:
                 st.markdown("##### Detailed Compliance Records")
                 st.dataframe(report_df, use_container_width=True, hide_index=True)
 
+                # ── Out-of-Slot report ─────────────────────────────────────────
+                st.markdown("##### ⏰ Out-of-Slot Login Report")
+                if out_records:
+                    out_df = pd.DataFrame(out_records)
+                    st.caption(
+                        f"Logins that occurred **outside** the agent’s scheduled time slot "
+                        f"or on Week Off days. "
+                        f"({out_df['Agent Name'].nunique()} agent(s), {len(out_df)} record(s))"
+                    )
+                    oos1, oos2, oos3 = st.columns(3)
+                    oos1.metric("Agents with OOS Activity", out_df["Agent Name"].nunique())
+                    oos2.metric("Total OOS Records",        len(out_df))
+                    oos3.metric("Week Off Logins",
+                                int((out_df["Type"] == "Week Off - Logged In").sum()))
+                    st.dataframe(out_df, use_container_width=True, hide_index=True)
+                else:
+                    st.success("✅ No out-of-slot login activity detected.")
+
                 # ── Export ────────────────────────────────────────────────────
                 out2 = io.BytesIO()
                 with pd.ExcelWriter(out2, engine="openpyxl") as writer:
                     report_df.to_excel(writer, sheet_name="Compliance Report", index=False)
                     if len(non_wo) > 0:
                         agent_summary.to_excel(writer, sheet_name="Agent Summary", index=False)
+                    if out_records:
+                        pd.DataFrame(out_records).to_excel(
+                            writer, sheet_name="Out-of-Slot Logins", index=False
+                        )
 
                 st.download_button(
                     "📥 Download Compliance Report (Excel)",
