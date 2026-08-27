@@ -879,7 +879,70 @@ if "sched_bytes" in st.session_state:
                     st.markdown("##### 👔 Supervisor Summary")
                     st.dataframe(sup_summary, use_container_width=True, hide_index=True)
 
-                # ── Detailed table ────────────────────────────────────────────
+                # ── Overall Summary Pivot ─────────────────────────────────────────
+                st.markdown("##### 📊 Overall Summary Pivot")
+                _pdata = report_df[
+                    ~report_df["Status"].str.startswith("📅", na=False)
+                ].copy()
+
+                def _parse_hms(s):
+                    try:
+                        if str(s).strip() in ("-", "", "nan"):
+                            return 0
+                        h, m, sec = str(s).strip().split(":")
+                        return int(h) * 3600 + int(m) * 60 + int(sec)
+                    except Exception:
+                        return 0
+
+                _pdata["_in_secs"]  = _pdata["In Call Duration"].apply(_parse_hms)
+                _pdata["_tot_secs"] = _pdata["Total Active in Slot"].apply(_parse_hms)
+
+                _idx_cols = (
+                    ["Supervisor", "Agent Name"]
+                    if sched_sup_col and "Supervisor" in _pdata.columns
+                    else ["Agent Name"]
+                )
+                _dates_sorted = sorted(
+                    _pdata["Date (IST)"].unique(),
+                    key=lambda _d: datetime.strptime(_d, "%d-%b-%Y"),
+                )
+
+                def _make_pivot(val_col):
+                    _pv = _pdata.pivot_table(
+                        index=_idx_cols,
+                        columns="Date (IST)",
+                        values=val_col,
+                        aggfunc="sum",
+                        fill_value=0,
+                    )
+                    _pv.columns.name = None
+                    _avail = [_d for _d in _dates_sorted if _d in _pv.columns]
+                    _pv = _pv[_avail].copy()
+                    _pv["TOTAL"] = _pv.sum(axis=1)
+                    _pv = _pv.reset_index()
+                    for _c in _pv.columns:
+                        if _c not in _idx_cols:
+                            _pv[_c] = _pv[_c].apply(fmt_duration)
+                    return _pv
+
+                _piv_in  = _make_pivot("_in_secs")
+                _piv_tot = _make_pivot("_tot_secs")
+
+                _ptab1, _ptab2 = st.tabs(
+                    ["📞 In Call Duration per Date", "⏱️ Total Active in Slot per Date"]
+                )
+                with _ptab1:
+                    st.caption(
+                        "Each cell = agent’s total **In Call** time within the scheduled slot on that date."
+                    )
+                    st.dataframe(_piv_in,  use_container_width=True, hide_index=True)
+                with _ptab2:
+                    st.caption(
+                        "Each cell = agent’s total **active** time (all working AUX codes) within the slot."
+                    )
+                    st.dataframe(_piv_tot, use_container_width=True, hide_index=True)
+
+                # ── Detailed table ──────────────────────────────────────────────────
                 st.markdown("##### Detailed Compliance Records")
                 st.dataframe(report_df, use_container_width=True, hide_index=True)
 
@@ -909,6 +972,9 @@ if "sched_bytes" in st.session_state:
                         sup_summary.to_excel(writer, sheet_name="Supervisor Summary", index=False)
                     if len(non_wo) > 0:
                         agent_summary.to_excel(writer, sheet_name="Agent Summary", index=False)
+                    if not _piv_in.empty:
+                        _piv_in.to_excel(writer,  sheet_name="Pivot - In Call",     index=False)
+                        _piv_tot.to_excel(writer, sheet_name="Pivot - Total Active", index=False)
                     if out_records:
                         pd.DataFrame(out_records).to_excel(
                             writer, sheet_name="Out-of-Slot Logins", index=False
