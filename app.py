@@ -143,11 +143,21 @@ with st.sidebar:
     st.header("📁 Data Source")
     uploaded = st.file_uploader("Upload Excel or CSV", type=["xlsx", "xls", "csv"])
 
-    if uploaded is None:
+    if uploaded is not None:
+        st.session_state["login_bytes"] = uploaded.read()
+        st.session_state["login_name"]  = uploaded.name
+
+    if "login_bytes" not in st.session_state:
         st.info("Upload a file to begin.")
         st.stop()
 
-    raw_df = load_file(uploaded.read(), uploaded.name)
+    st.caption(f"📄 **{st.session_state['login_name']}**")
+    if st.button("🗑️ Clear login file", key="clear_login"):
+        st.session_state.pop("login_bytes", None)
+        st.session_state.pop("login_name",  None)
+        st.rerun()
+
+    raw_df = load_file(st.session_state["login_bytes"], st.session_state["login_name"])
     st.success(f"✅ {len(raw_df):,} rows loaded")
     st.info("🕐 UTC → IST (+5:30) conversion applied")
 
@@ -503,7 +513,18 @@ sched_file = st.file_uploader(
 )
 
 if sched_file is not None:
-    sched_raw = load_file(sched_file.read(), sched_file.name)
+    st.session_state["sched_bytes"] = sched_file.read()
+    st.session_state["sched_name"]  = sched_file.name
+
+if "sched_bytes" in st.session_state:
+    sc1, sc2 = st.columns([1, 3])
+    if sc1.button("🗑️ Clear schedule file", key="clear_sched"):
+        st.session_state.pop("sched_bytes", None)
+        st.session_state.pop("sched_name",  None)
+        st.rerun()
+    sc2.caption(f"📄 Using: **{st.session_state['sched_name']}**")
+
+    sched_raw = load_file(st.session_state["sched_bytes"], st.session_state["sched_name"])
     st.success(f"Schedule loaded — {len(sched_raw)} agent rows")
 
     with st.expander("Preview Schedule Data", expanded=False):
