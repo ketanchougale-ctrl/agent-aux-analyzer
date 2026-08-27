@@ -881,66 +881,99 @@ if "sched_bytes" in st.session_state:
 
                 # ── Overall Summary Pivot ─────────────────────────────────────────
                 st.markdown("##### 📊 Overall Summary Pivot")
-                _pdata = report_df[
-                    ~report_df["Status"].str.startswith("📅", na=False)
-                ].copy()
+                st.caption(
+                    "Supervisor → Agent Name × Date — each date has two columns: "
+                    "**In Call Duration** (within scheduled slot) and "
+                    "**Out-of-Slot Duration** (outside scheduled slot / WO day)."
+                )
 
                 def _parse_hms(s):
                     try:
                         if str(s).strip() in ("-", "", "nan"):
                             return 0
-                        h, m, sec = str(s).strip().split(":")
-                        return int(h) * 3600 + int(m) * 60 + int(sec)
+                        _h, _m, _s = str(s).strip().split(":")
+                        return int(_h) * 3600 + int(_m) * 60 + int(_s)
                     except Exception:
                         return 0
 
-                _pdata["_in_secs"]  = _pdata["In Call Duration"].apply(_parse_hms)
-                _pdata["_tot_secs"] = _pdata["Total Active in Slot"].apply(_parse_hms)
+                _pdata2 = report_df[
+                    ~report_df["Status"].str.startswith("📅", na=False)
+                ].copy()
+                _pdata2["_in_secs"] = _pdata2["In Call Duration"].apply(_parse_hms)
 
-                _idx_cols = (
+                _idx_cols_piv = (
                     ["Supervisor", "Agent Name"]
-                    if sched_sup_col and "Supervisor" in _pdata.columns
+                    if sched_sup_col and "Supervisor" in _pdata2.columns
                     else ["Agent Name"]
                 )
-                _dates_sorted = sorted(
-                    _pdata["Date (IST)"].unique(),
+
+                _in_agg = (
+                    _pdata2
+                    .groupby(_idx_cols_piv + ["Date (IST)"])["_in_secs"]
+                    .sum()
+                    .reset_index()
+                )
+
+                if out_records:
+                    _oos_df2 = pd.DataFrame(out_records).copy()
+                    _oos_dur = _oos_df2.get(
+                        "Out-of-Slot Duration",
+                        pd.Series("00:00:00", index=_oos_df2.index),
+                    ).fillna(
+                        _oos_df2.get("Duration",
+                                     pd.Series("00:00:00", index=_oos_df2.index))
+                    ).fillna("00:00:00")
+                    _oos_df2["_oos_secs"] = _oos_dur.apply(_parse_hms)
+                    _oos_cols2 = [c for c in _idx_cols_piv if c in _oos_df2.columns]
+                    _oos_agg = (
+                        _oos_df2
+                        .groupby(_oos_cols2 + ["Date (IST)"])["_oos_secs"]
+                        .sum()
+                        .reset_index()
+                    )
+                    for _c2 in _idx_cols_piv:
+                        if _c2 not in _oos_agg.columns:
+                            _oos_agg[_c2] = ""
+                else:
+                    _oos_agg = pd.DataFrame(
+                        columns=_idx_cols_piv + ["Date (IST)", "_oos_secs"]
+                    )
+
+                _clong = (
+                    _in_agg
+                    .merge(_oos_agg, on=_idx_cols_piv + ["Date (IST)"], how="outer")
+                    .fillna(0)
+                )
+                if "_oos_secs" not in _clong.columns:
+                    _clong["_oos_secs"] = 0
+
+                _piv_dates2 = sorted(
+                    _clong["Date (IST)"].unique(),
                     key=lambda _d: datetime.strptime(_d, "%d-%b-%Y"),
                 )
 
-                def _make_pivot(val_col):
-                    _pv = _pdata.pivot_table(
-                        index=_idx_cols,
-                        columns="Date (IST)",
-                        values=val_col,
-                        aggfunc="sum",
-                        fill_value=0,
-                    )
-                    _pv.columns.name = None
-                    _avail = [_d for _d in _dates_sorted if _d in _pv.columns]
-                    _pv = _pv[_avail].copy()
-                    _pv["TOTAL"] = _pv.sum(axis=1)
-                    _pv = _pv.reset_index()
-                    for _c in _pv.columns:
-                        if _c not in _idx_cols:
-                            _pv[_c] = _pv[_c].apply(fmt_duration)
-                    return _pv
+                _piv_rows = []
+                for _key, _grp in _clong.groupby(_idx_cols_piv, sort=True):
+                    if not isinstance(_key, tuple):
+                        _key = (_key,)
+                    _row = dict(zip(_idx_cols_piv, _key))
+                    _tot_in = _tot_oos = 0
+                    for _date in _piv_dates2:
+                        _dg    = _grp[_grp["Date (IST)"] == _date]
+                        _in_s  = int(_dg["_in_secs"].sum())
+                        _oos_s = int(_dg["_oos_secs"].sum())
+                        _row[f"{_date} | In Call"]     = fmt_duration(_in_s)
+                        _row[f"{_date} | Out-of-Slot"] = fmt_duration(_oos_s)
+                        _tot_in  += _in_s
+                        _tot_oos += _oos_s
+                    _row["TOTAL | In Call"]     = fmt_duration(_tot_in)
+                    _row["TOTAL | Out-of-Slot"] = fmt_duration(_tot_oos)
+                    _piv_rows.append(_row)
 
-                _piv_in  = _make_pivot("_in_secs")
-                _piv_tot = _make_pivot("_tot_secs")
-
-                _ptab1, _ptab2 = st.tabs(
-                    ["📞 In Call Duration per Date", "⏱️ Total Active in Slot per Date"]
+                _piv_combined = (
+                    pd.DataFrame(_piv_rows) if _piv_rows else pd.DataFrame()
                 )
-                with _ptab1:
-                    st.caption(
-                        "Each cell = agent’s total **In Call** time within the scheduled slot on that date."
-                    )
-                    st.dataframe(_piv_in,  use_container_width=True, hide_index=True)
-                with _ptab2:
-                    st.caption(
-                        "Each cell = agent’s total **active** time (all working AUX codes) within the slot."
-                    )
-                    st.dataframe(_piv_tot, use_container_width=True, hide_index=True)
+                st.dataframe(_piv_combined, use_container_width=True, hide_index=True)
 
                 # ── Detailed table ──────────────────────────────────────────────────
                 st.markdown("##### Detailed Compliance Records")
@@ -972,9 +1005,8 @@ if "sched_bytes" in st.session_state:
                         sup_summary.to_excel(writer, sheet_name="Supervisor Summary", index=False)
                     if len(non_wo) > 0:
                         agent_summary.to_excel(writer, sheet_name="Agent Summary", index=False)
-                    if not _piv_in.empty:
-                        _piv_in.to_excel(writer,  sheet_name="Pivot - In Call",     index=False)
-                        _piv_tot.to_excel(writer, sheet_name="Pivot - Total Active", index=False)
+                    if not _piv_combined.empty:
+                        _piv_combined.to_excel(writer, sheet_name="Summary Pivot", index=False)
                     if out_records:
                         pd.DataFrame(out_records).to_excel(
                             writer, sheet_name="Out-of-Slot Logins", index=False
