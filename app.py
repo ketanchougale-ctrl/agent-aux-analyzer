@@ -94,6 +94,30 @@ def parse_time_slot(slot_str: str):
     return (s_time, e_time) if s_time and e_time else None
 
 
+WORKING_AUX: set[str] = {
+    "outboundpending",
+    "callbackpending",
+    "consultpending",
+    "inboundpending",
+    "outbond",
+    "outbound",
+    "acw",
+    "in call - working",
+    "in call- working",
+    "e-mails",
+    "emails",
+    "follow-up case work",
+    "followup case work",
+    "followup",
+    "follow-up",
+}
+
+
+def is_working_aux(label: str) -> bool:
+    """Return True if the AUX label represents active/working activity."""
+    return label.lower().strip() in WORKING_AUX
+
+
 @st.cache_data(show_spinner="Loading file…")
 def load_file(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     if file_name.lower().endswith(".csv"):
@@ -586,6 +610,8 @@ if sched_file is not None:
                         })
                         wo_rows = agent_login[agent_login[login_col].dt.date == check_date]
                         for _, lrow in wo_rows.iterrows():
+                            if not is_working_aux(lrow["_aux_label"]):
+                                continue
                             _ds = max(0, (lrow[logout_col] - lrow[login_col]).total_seconds())
                             if _ds > 0:
                                 out_records.append({
@@ -623,6 +649,8 @@ if sched_file is not None:
                             ].copy()
 
                             for _, lrow in day_rows.iterrows():
+                                if not is_working_aux(lrow["_aux_label"]):
+                                    continue
                                 _lt  = lrow[login_col]
                                 _lo  = lrow[logout_col]
                                 _tot = max(0, (_lo - _lt).total_seconds())
