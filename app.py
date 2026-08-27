@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import pandas as pd
 import io
@@ -67,6 +68,30 @@ def find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
         if key in lookup:
             return lookup[key]
     return None
+
+
+def parse_time_slot(slot_str: str):
+    """Parse slot strings like '6 PM-7PM', '10 PM to 11 PM', '8PM to 9 PM'.
+    Returns (start_time, end_time) or None if unparseable."""
+    s = str(slot_str).strip()
+    parts = re.split(r'\s*(?:\bto\b|-)\s*', s, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return None
+
+    def _t(ts: str):
+        ts = ts.strip()
+        m = re.match(r'(\d{1,2})(?::(\d{2}))?\s*(AM|PM)', ts, re.IGNORECASE)
+        if not m:
+            return None
+        h, mi, period = int(m.group(1)), int(m.group(2) or 0), m.group(3).upper()
+        if period == "PM" and h != 12:
+            h += 12
+        if period == "AM" and h == 12:
+            h = 0
+        return time(h, mi)
+
+    s_time, e_time = _t(parts[0]), _t(parts[1])
+    return (s_time, e_time) if s_time and e_time else None
 
 
 @st.cache_data(show_spinner="Loading file…")
@@ -433,3 +458,253 @@ with st.expander(f"🗓️ Full Day View — {sel_agent}  ({sel_date.strftime('%
                     annotation_position="top left",
                 )
                 st.plotly_chart(fig_fd, use_container_width=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Schedule Compliance Report
+# ──────────────────────────────────────────────────────────────────────────────
+st.divider()
+st.markdown('<div class="section-header">📋 Schedule Compliance Report</div>', unsafe_allow_html=True)
+st.write("")
+st.caption(
+    "Upload the agent schedule file (Excel/CSV). "
+    "Agent names in the schedule must **exactly match** the Agent Name values in the login data. "
+    "Expected day columns: Sun, Mon, Tue, Wed, Thu, Fri, Sat — values like '6 PM-7PM', "
+    "'10 PM to 11 PM', or 'WO' (week off)."
+)
+
+sched_file = st.file_uploader(
+    "Upload Schedule File (Excel / CSV)",
+    type=["xlsx", "xls", "csv"],
+    key="sched_upload",
+)
+
+if sched_file is not None:
+    sched_raw = load_file(sched_file.read(), sched_file.name)
+    st.success(f"Schedule loaded — {len(sched_raw)} agent rows")
+
+    with st.expander("Preview Schedule Data", expanded=False):
+        st.dataframe(sched_raw, use_container_width=True)
+
+    st.markdown("##### Configure Schedule Columns")
+    sched_cols = list(sched_raw.columns)
+    cfg1, cfg2 = st.columns([2, 3])
+
+    with cfg1:
+        sched_agent_default = find_col(sched_raw, ["agent name", "agentname", "agent"])
+        sched_agent_col = st.selectbox(
+            "Agent Name column (in schedule)",
+            sched_cols,
+            index=sched_cols.index(sched_agent_default) if sched_agent_default else 0,
+            key="sched_agent_col",
+        )
+
+    with cfg2:
+        auto_days = [
+            c for c in sched_cols
+            if c.strip()[:3].lower() in ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+        ]
+        day_cols_sel = st.multiselect(
+            "Day-of-week columns (select all that apply)",
+            sched_cols,
+            default=auto_days,
+            key="day_cols_sel",
+        )
+
+    # Date range to analyse
+    all_dates = sorted(df[login_col].dt.date.unique())
+    dr1, dr2 = st.columns(2)
+    with dr1:
+        date_from = st.date_input("From Date (IST)", value=min(all_dates), key="sched_from")
+    with dr2:
+        date_to = st.date_input("To Date (IST)",   value=max(all_dates), key="sched_to")
+
+    check_dates = [d for d in all_dates if date_from <= d <= date_to]
+
+    if not check_dates:
+        st.warning("No dates in the login data fall within the selected range.")
+    else:
+        st.info(
+            f"Checking **{len(check_dates)} date(s)** × "
+            f"**{len(sched_raw)} agent row(s)** = "
+            f"**{len(check_dates) * len(sched_raw)} slot checks**."
+        )
+
+        if st.button("📊 Generate Compliance Report", type="primary"):
+
+            # Build day-of-week abbreviation → schedule column name
+            _dow_norm = {
+                "sun": "Sun", "mon": "Mon", "tue": "Tue",
+                "wed": "Wed", "thu": "Thu", "fri": "Fri", "sat": "Sat",
+            }
+            dow_col_map = {}
+            for col in day_cols_sel:
+                prefix = col.strip()[:3].lower()
+                if prefix in _dow_norm:
+                    dow_col_map[_dow_norm[prefix]] = col
+
+            # weekday() → English day abbreviation (locale-independent)
+            _wd_to_dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+            records = []
+            total_ops = max(len(sched_raw) * len(check_dates), 1)
+            prog = st.progress(0.0, text="Generating report…")
+            done = 0
+
+            for _, sched_row in sched_raw.iterrows():
+                sched_agent = str(sched_row[sched_agent_col]).strip()
+                if not sched_agent or sched_agent.lower() == "nan":
+                    done += len(check_dates)
+                    prog.progress(min(done / total_ops, 1.0))
+                    continue
+
+                agent_login = df[df[agent_col] == sched_agent]
+
+                for check_date in check_dates:
+                    dow_short = _wd_to_dow[check_date.weekday()]
+
+                    slot_str = "WO"
+                    if dow_short in dow_col_map:
+                        raw = sched_row.get(dow_col_map[dow_short], "WO")
+                        slot_str = str(raw).strip() if pd.notna(raw) else "WO"
+
+                    base = {
+                        "Agent Name":     sched_agent,
+                        "Date (IST)":     check_date.strftime("%d-%b-%Y"),
+                        "Day":            dow_short,
+                        "Scheduled Slot": slot_str,
+                    }
+
+                    if slot_str.upper() in ("WO", "", "NAN", "NONE", "-"):
+                        records.append({
+                            **base,
+                            "Scheduled Slot":       "Week Off",
+                            "Status":               "📅 Week Off",
+                            "In Call Duration":     "-",
+                            "Total Active in Slot": "-",
+                            "AUX Breakdown":        "-",
+                        })
+
+                    else:
+                        parsed = parse_time_slot(slot_str)
+
+                        if parsed is None:
+                            records.append({
+                                **base,
+                                "Status":               "⚠️ Slot Parse Error",
+                                "In Call Duration":     "-",
+                                "Total Active in Slot": "-",
+                                "AUX Breakdown":        f"Cannot parse: '{slot_str}'",
+                            })
+
+                        else:
+                            s_time, e_time = parsed
+                            q_s = datetime.combine(check_date, s_time)
+                            q_e = datetime.combine(check_date, e_time)
+
+                            day_rows = agent_login[agent_login[login_col].dt.date == check_date]
+                            overlap  = day_rows[
+                                (day_rows[login_col] < q_e) & (day_rows[logout_col] > q_s)
+                            ].copy()
+
+                            if overlap.empty:
+                                records.append({
+                                    **base,
+                                    "Status":               "❌ Not Logged In",
+                                    "In Call Duration":     "00:00:00",
+                                    "Total Active in Slot": "00:00:00",
+                                    "AUX Breakdown":        "No activity",
+                                })
+                            else:
+                                overlap["_es"] = overlap[login_col].clip(lower=q_s, upper=q_e)
+                                overlap["_ee"] = overlap[logout_col].clip(lower=q_s, upper=q_e)
+                                overlap["_sc"] = (overlap["_ee"] - overlap["_es"]).dt.total_seconds()
+
+                                total_secs   = overlap["_sc"].sum()
+                                in_call_secs = overlap[
+                                    overlap["_aux_label"] == "In Call - Working"
+                                ]["_sc"].sum()
+
+                                aux_grp = (
+                                    overlap.groupby("_aux_label")["_sc"]
+                                    .sum().sort_values(ascending=False)
+                                )
+                                aux_str = "; ".join(
+                                    f"{k}: {fmt_duration(v)}" for k, v in aux_grp.items()
+                                )
+
+                                status = (
+                                    "✅ Logged In - On Calls"
+                                    if in_call_secs > 0
+                                    else "⚠️ Logged In - No Calls"
+                                )
+                                records.append({
+                                    **base,
+                                    "Status":               status,
+                                    "In Call Duration":     fmt_duration(in_call_secs),
+                                    "Total Active in Slot": fmt_duration(total_secs),
+                                    "AUX Breakdown":        aux_str,
+                                })
+
+                    done += 1
+                    prog.progress(min(done / total_ops, 1.0))
+
+            prog.empty()
+
+            if not records:
+                st.info(
+                    "No records generated. "
+                    "Verify that agent names in the schedule match the login data exactly."
+                )
+            else:
+                report_df = pd.DataFrame(records)
+
+                # ── Summary metrics ───────────────────────────────────────────
+                non_wo    = report_df[~report_df["Status"].str.startswith("📅", na=False)]
+                on_calls  = non_wo[non_wo["Status"].str.startswith("✅", na=False)]
+                no_calls  = non_wo[non_wo["Status"].str.startswith("⚠️", na=False)]
+                not_in    = non_wo[non_wo["Status"].str.startswith("❌", na=False)]
+                week_off  = report_df[report_df["Status"].str.startswith("📅", na=False)]
+
+                sm1, sm2, sm3, sm4, sm5 = st.columns(5)
+                sm1.metric("Scheduled Slots",       len(non_wo))
+                sm2.metric("✅ On Calls",             len(on_calls))
+                sm3.metric("⚠️ Logged - No Calls",   len(no_calls))
+                sm4.metric("❌ Not Logged In",        len(not_in))
+                sm5.metric("📅 Week Off",             len(week_off))
+
+                # ── Compliance % per agent ────────────────────────────────────
+                if len(non_wo) > 0:
+                    agent_summary = (
+                        non_wo.groupby("Agent Name")["Status"]
+                        .apply(lambda s: pd.Series({
+                            "Scheduled Days":  len(s),
+                            "✅ On Calls":      (s.str.startswith("✅")).sum(),
+                            "⚠️ No Calls":      (s.str.startswith("⚠️")).sum(),
+                            "❌ Not Logged In": (s.str.startswith("❌")).sum(),
+                        }))
+                        .reset_index()
+                    )
+                    agent_summary["Compliance %"] = (
+                        agent_summary["✅ On Calls"] / agent_summary["Scheduled Days"] * 100
+                    ).round(1).astype(str) + "%"
+
+                    st.markdown("##### Agent Summary")
+                    st.dataframe(agent_summary, use_container_width=True, hide_index=True)
+
+                # ── Detailed table ────────────────────────────────────────────
+                st.markdown("##### Detailed Compliance Records")
+                st.dataframe(report_df, use_container_width=True, hide_index=True)
+
+                # ── Export ────────────────────────────────────────────────────
+                out2 = io.BytesIO()
+                with pd.ExcelWriter(out2, engine="openpyxl") as writer:
+                    report_df.to_excel(writer, sheet_name="Compliance Report", index=False)
+                    if len(non_wo) > 0:
+                        agent_summary.to_excel(writer, sheet_name="Agent Summary", index=False)
+
+                st.download_button(
+                    "📥 Download Compliance Report (Excel)",
+                    data=out2.getvalue(),
+                    file_name=f"ScheduleCompliance_{date_from}_{date_to}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
