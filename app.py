@@ -576,7 +576,7 @@ if "sched_bytes" in st.session_state:
 
     st.markdown("##### Configure Schedule Columns")
     sched_cols = list(sched_raw.columns)
-    cfg1, cfg2 = st.columns([2, 3])
+    cfg1, cfg2, cfg3 = st.columns([2, 2, 3])
 
     with cfg1:
         sched_agent_default = find_col(sched_raw, ["agent name", "agentname", "agent"])
@@ -588,6 +588,22 @@ if "sched_bytes" in st.session_state:
         )
 
     with cfg2:
+        sched_sup_default = find_col(sched_raw, [
+            "supervisor name", "supervisorname", "supervisor",
+            "team lead", "teamlead", "tl", "manager", "reporting to", "reports to",
+        ])
+        _sup_opts = ["— skip —"] + sched_cols
+        sched_sup_col = st.selectbox(
+            "Supervisor column (optional)",
+            _sup_opts,
+            index=(_sup_opts.index(sched_sup_default)
+                   if sched_sup_default and sched_sup_default in _sup_opts else 0),
+            key="sched_sup_col",
+        )
+        if sched_sup_col == "— skip —":
+            sched_sup_col = None
+
+    with cfg3:
         auto_days = [
             c for c in sched_cols
             if c.strip()[:3].lower() in ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
@@ -647,6 +663,11 @@ if "sched_bytes" in st.session_state:
                     prog.progress(min(done / total_ops, 1.0))
                     continue
 
+                sched_supervisor = (
+                    str(sched_row[sched_sup_col]).strip()
+                    if sched_sup_col and pd.notna(sched_row.get(sched_sup_col))
+                    else ""
+                )
                 agent_login = df[df[agent_col] == sched_agent]
 
                 for check_date in check_dates:
@@ -658,6 +679,7 @@ if "sched_bytes" in st.session_state:
                         slot_str = str(raw).strip() if pd.notna(raw) else "WO"
 
                     base = {
+                        "Supervisor":     sched_supervisor,
                         "Agent Name":     sched_agent,
                         "Date (IST)":     check_date.strftime("%d-%b-%Y"),
                         "Day":            dow_short,
@@ -680,6 +702,7 @@ if "sched_bytes" in st.session_state:
                             _ds = max(0, (lrow[logout_col] - lrow[login_col]).total_seconds())
                             if _ds > 0:
                                 out_records.append({
+                                    "Supervisor":          sched_supervisor,
                                     "Agent Name":          sched_agent,
                                     "Date (IST)":          check_date.strftime("%d-%b-%Y"),
                                     "Day":                 dow_short,
@@ -735,6 +758,7 @@ if "sched_bytes" in st.session_state:
                                     else:
                                         _otype = "Partially After Slot"
                                     out_records.append({
+                                        "Supervisor":           sched_supervisor,
                                         "Agent Name":           sched_agent,
                                         "Date (IST)":           check_date.strftime("%d-%b-%Y"),
                                         "Day":                  dow_short,
@@ -833,6 +857,28 @@ if "sched_bytes" in st.session_state:
                     st.markdown("##### Agent Summary")
                     st.dataframe(agent_summary, use_container_width=True, hide_index=True)
 
+                # ── Supervisor summary ───────────────────────────────────────────
+                sup_summary = pd.DataFrame()
+                if sched_sup_col and len(non_wo) > 0 and "Supervisor" in non_wo.columns:
+                    _ss = []
+                    for _sup, _sg in non_wo.groupby("Supervisor"):
+                        _stot = len(_sg)
+                        _son  = int(_sg["Status"].str.startswith("✅").sum())
+                        _snc  = int(_sg["Status"].str.startswith("⚠️").sum())
+                        _sni  = int(_sg["Status"].str.startswith("❌").sum())
+                        _ss.append({
+                            "Supervisor":      _sup,
+                            "Agents":          _sg["Agent Name"].nunique(),
+                            "Scheduled Slots": _stot,
+                            "✅ On Calls":      _son,
+                            "⚠️ No Calls":      _snc,
+                            "❌ Not Logged In": _sni,
+                            "Compliance %":    f"{_son / _stot * 100:.1f}%" if _stot > 0 else "0.0%",
+                        })
+                    sup_summary = pd.DataFrame(_ss)
+                    st.markdown("##### 👔 Supervisor Summary")
+                    st.dataframe(sup_summary, use_container_width=True, hide_index=True)
+
                 # ── Detailed table ────────────────────────────────────────────
                 st.markdown("##### Detailed Compliance Records")
                 st.dataframe(report_df, use_container_width=True, hide_index=True)
@@ -859,6 +905,8 @@ if "sched_bytes" in st.session_state:
                 out2 = io.BytesIO()
                 with pd.ExcelWriter(out2, engine="openpyxl") as writer:
                     report_df.to_excel(writer, sheet_name="Compliance Report", index=False)
+                    if not sup_summary.empty:
+                        sup_summary.to_excel(writer, sheet_name="Supervisor Summary", index=False)
                     if len(non_wo) > 0:
                         agent_summary.to_excel(writer, sheet_name="Agent Summary", index=False)
                     if out_records:
