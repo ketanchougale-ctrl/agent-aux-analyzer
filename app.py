@@ -944,13 +944,20 @@ if "sched_bytes" in st.session_state:
                 # ── Compliance % per agent ────────────────────────────────────
                 if len(non_wo) > 0:
                     _stats = []
-                    for _agent, _grp in non_wo.groupby("Agent Name"):
+                    _ag_grp_cols = (
+                        ["Supervisor", "Agent Name"]
+                        if sched_sup_col and "Supervisor" in non_wo.columns
+                        else ["Agent Name"]
+                    )
+                    for _keys_ag, _grp in non_wo.groupby(_ag_grp_cols):
+                        if not isinstance(_keys_ag, tuple):
+                            _keys_ag = (_keys_ag,)
                         _tot = len(_grp)
                         _on  = int(_grp["Status"].str.startswith("✅").sum())
                         _nc  = int(_grp["Status"].str.startswith("⚠️").sum())
                         _ni  = int(_grp["Status"].str.startswith("❌").sum())
                         _stats.append({
-                            "Agent Name":      _agent,
+                            **dict(zip(_ag_grp_cols, _keys_ag)),
                             "Scheduled Days":  _tot,
                             "✅ On Calls":      _on,
                             "⚠️ No Calls":      _nc,
@@ -1132,15 +1139,18 @@ if "sched_bytes" in st.session_state:
                     _r3 = dict(zip(_idx_cols_piv, _key3))
                     _ttl_cnt = _ttl_in = _ttl_comm = 0
                     for _d3 in _piv3_dates:
-                        _dg3  = _g3[_g3["Date (IST)"] == _d3]
-                        _cnt3 = int(_dg3["_slot_cnt"].sum())
-                        _in3  = int(_dg3["_in3_secs"].sum())
+                        _dg3   = _g3[_g3["Date (IST)"] == _d3]
+                        _cnt3  = int(_dg3["_slot_cnt"].sum())
+                        _in3   = int(_dg3["_in3_secs"].sum())
+                        _comm3 = int(_dg3["_committed_secs"].sum())
                         _r3[f"{_d3} | Count of Scheduled Slot"] = _cnt3
+                        _r3[f"{_d3} | Scheduled Hrs"]           = fmt_duration(_comm3)
                         _r3[f"{_d3} | Sum of In Call Duration"]  = fmt_duration(_in3)
                         _ttl_cnt  += _cnt3
                         _ttl_in   += _in3
-                        _ttl_comm += int(_dg3["_committed_secs"].sum())
+                        _ttl_comm += _comm3
                     _r3["Total Count of Scheduled Slot"] = _ttl_cnt
+                    _r3["Total Scheduled Hrs"]           = fmt_duration(_ttl_comm)
                     _r3["Total Sum of In Call Duration"]  = fmt_duration(_ttl_in)
                     _r3["Compliance %"] = (
                         f"{_ttl_in / _ttl_comm * 100:.1f}%"
@@ -1150,6 +1160,51 @@ if "sched_bytes" in st.session_state:
 
                 _piv3 = pd.DataFrame(_piv3_rows) if _piv3_rows else pd.DataFrame()
                 st.dataframe(_piv3, use_container_width=True, hide_index=True)
+
+                # ── Supervisor-level Hrs vs Committed Pivot ────────────────────
+                if sched_sup_col and "Supervisor" in _pdata3.columns:
+                    st.markdown("##### 👔 Supervisor Hrs vs Committed Hrs Pivot")
+                    _grp3_sup = (
+                        _pdata3
+                        .groupby(["Supervisor", "Date (IST)"], sort=True)
+                        .agg(
+                            _slot_cnt       = ("Scheduled Slot",  "count"),
+                            _in3_secs       = ("_in3_secs",       "sum"),
+                            _committed_secs = ("_committed_secs", "sum"),
+                        )
+                        .reset_index()
+                    )
+                    _piv3s_dates = sorted(
+                        _grp3_sup["Date (IST)"].unique(),
+                        key=lambda _d: datetime.strptime(_d, "%d-%b-%Y"),
+                    )
+                    _piv3s_rows = []
+                    for _sup3, _gs3 in _grp3_sup.groupby("Supervisor", sort=True):
+                        _rs3 = {"Supervisor": _sup3}
+                        _ts_cnt = _ts_in = _ts_comm = 0
+                        for _ds3 in _piv3s_dates:
+                            _dgs3 = _gs3[_gs3["Date (IST)"] == _ds3]
+                            _cs3  = int(_dgs3["_slot_cnt"].sum())
+                            _is3  = int(_dgs3["_in3_secs"].sum())
+                            _co3  = int(_dgs3["_committed_secs"].sum())
+                            _rs3[f"{_ds3} | Count of Scheduled Slot"] = _cs3
+                            _rs3[f"{_ds3} | Scheduled Hrs"]           = fmt_duration(_co3)
+                            _rs3[f"{_ds3} | Sum of In Call Duration"]  = fmt_duration(_is3)
+                            _ts_cnt  += _cs3
+                            _ts_in   += _is3
+                            _ts_comm += _co3
+                        _rs3["Total Count of Scheduled Slot"] = _ts_cnt
+                        _rs3["Total Scheduled Hrs"]           = fmt_duration(_ts_comm)
+                        _rs3["Total Sum of In Call Duration"]  = fmt_duration(_ts_in)
+                        _rs3["Compliance %"] = (
+                            f"{_ts_in / _ts_comm * 100:.1f}%"
+                            if _ts_comm > 0 else "0.0%"
+                        )
+                        _piv3s_rows.append(_rs3)
+                    _piv3_sup = pd.DataFrame(_piv3s_rows) if _piv3s_rows else pd.DataFrame()
+                    st.dataframe(_piv3_sup, use_container_width=True, hide_index=True)
+                else:
+                    _piv3_sup = pd.DataFrame()
 
                 # ── Detailed table ──────────────────────────────────────────────────
                 st.markdown("##### Detailed Compliance Records")
@@ -1203,16 +1258,20 @@ if "sched_bytes" in st.session_state:
                     if len(non_wo) > 0:
                         _ag_on  = int(agent_summary["✅ On Calls"].sum())
                         _ag_tot = int(agent_summary["Scheduled Days"].sum())
+                        _ag_total_d = {c: "" for c in agent_summary.columns}
+                        _ag_total_d.update({
+                            "Agent Name":      "Total",
+                            "Scheduled Days":  _ag_tot,
+                            "✅ On Calls":      _ag_on,
+                            "⚠️ No Calls":      int(agent_summary["⚠️ No Calls"].sum()),
+                            "❌ Not Logged In": int(agent_summary["❌ Not Logged In"].sum()),
+                            "Compliance %":    _ag_on / _ag_tot if _ag_tot > 0 else 0.0,
+                        })
+                        if "Supervisor" in agent_summary.columns:
+                            _ag_total_d["Supervisor"] = "Total"
                         _ag_xl  = pd.concat([
                             agent_summary,
-                            pd.DataFrame([{
-                                "Agent Name":      "Total",
-                                "Scheduled Days":  _ag_tot,
-                                "✅ On Calls":      _ag_on,
-                                "⚠️ No Calls":      int(agent_summary["⚠️ No Calls"].sum()),
-                                "❌ Not Logged In": int(agent_summary["❌ Not Logged In"].sum()),
-                                "Compliance %":    _ag_on / _ag_tot if _ag_tot > 0 else 0.0,
-                            }])
+                            pd.DataFrame([_ag_total_d])
                         ], ignore_index=True)
                         _ag_xl.to_excel(writer, sheet_name="Agent Summary", index=False)
                         _style_ws(writer.sheets["Agent Summary"], has_total_row=True)
@@ -1227,6 +1286,10 @@ if "sched_bytes" in st.session_state:
                     if not _piv3.empty:
                         _piv3.to_excel(writer, sheet_name="Hrs vs Committed", index=False)
                         _style_ws(writer.sheets["Hrs vs Committed"], pct_col=None)
+
+                    if not _piv3_sup.empty:
+                        _piv3_sup.to_excel(writer, sheet_name="Sup Hrs vs Committed", index=False)
+                        _style_ws(writer.sheets["Sup Hrs vs Committed"], pct_col=None)
 
                     if out_records:
                         pd.DataFrame(out_records).to_excel(
