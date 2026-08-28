@@ -224,6 +224,12 @@ with st.sidebar:
     if skill_col == "— skip —":
         skill_col = None
 
+    avail_default = find_col(raw_df, ["available time", "availabletime", "available", "avail time", "avail"])
+    avail_col = st.selectbox("Available Time Column (optional)", ["— skip —"] + cols,
+                              index=(_idx(avail_default) + 1) if avail_default else 0)
+    if avail_col == "— skip —":
+        avail_col = None
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Parse datetimes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -243,6 +249,22 @@ df[login_col]  = df[login_col]  + IST_OFFSET
 df[logout_col] = df[logout_col] + IST_OFFSET
 
 # ── Derive AUX label ─────────────────────────────────────────────────────────
+def _is_nonzero(val):
+    if pd.isna(val):
+        return False
+    s = str(val).strip()
+    if not s or s.lower() in ("0", "nan", "-", "00:00:00", "00:00", "0:00:00"):
+        return False
+    try:
+        return float(s) > 0
+    except ValueError:
+        pass
+    try:
+        return any(int(p) > 0 for p in s.split(":"))
+    except Exception:
+        return bool(s)
+
+
 def derive_aux_label(row):
     aux_val   = str(row[aux_col]).strip()   if aux_col   and pd.notna(row[aux_col])   and str(row[aux_col]).strip()   != "" else ""
     skill_val = str(row[skill_col]).strip() if skill_col and pd.notna(row[skill_col]) and str(row[skill_col]).strip() != "" else ""
@@ -250,6 +272,8 @@ def derive_aux_label(row):
         return aux_val
     elif skill_val:
         return "In Call - Working"
+    elif avail_col and _is_nonzero(row.get(avail_col)):
+        return "Available"
     else:
         return "Unavailable - Not Working"
 
