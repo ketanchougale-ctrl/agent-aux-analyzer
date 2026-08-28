@@ -890,7 +890,7 @@ if "sched_bytes" in st.session_state:
 
                                 total_secs   = overlap["_sc"].sum()
                                 in_call_secs = overlap[
-                                    overlap["_aux_label"] == "In Call - Working"
+                                    overlap["_aux_label"].apply(is_working_aux)
                                 ]["_sc"].sum()
 
                                 aux_grp = (
