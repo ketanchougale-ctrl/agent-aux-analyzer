@@ -919,7 +919,12 @@ if "sched_bytes" in st.session_state:
                                         overlap[skill_col].notna() &
                                         (overlap[skill_col].astype(str).str.strip() != "")
                                     )
-                                    _call_mask = _aux_blank & _skill_pop
+                                    _dur_ok = (
+                                        overlap[dur_default].apply(_is_nonzero)
+                                        if dur_default and dur_default in overlap.columns
+                                        else pd.Series(True, index=overlap.index)
+                                    )
+                                    _call_mask = _aux_blank & _skill_pop & _dur_ok
                                     _outbound_cnt = int(
                                         overlap.loc[_call_mask, skill_col]
                                         .fillna("").str.lower()
