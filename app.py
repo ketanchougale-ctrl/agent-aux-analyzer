@@ -799,6 +799,8 @@ if "sched_bytes" in st.session_state:
                             "In Call Duration":     "-",
                             "Total Active in Slot": "-",
                             "AUX Breakdown":        "-",
+                            "Inbound Handled":      0,
+                            "Outbound Handled":     0,
                         })
                         wo_rows = agent_login[agent_login[login_col].dt.date == check_date]
                         for _, lrow in wo_rows.iterrows():
@@ -829,6 +831,8 @@ if "sched_bytes" in st.session_state:
                                 "In Call Duration":     "-",
                                 "Total Active in Slot": "-",
                                 "AUX Breakdown":        f"Cannot parse: '{slot_str}'",
+                                "Inbound Handled":      0,
+                                "Outbound Handled":     0,
                             })
 
                         else:
@@ -882,6 +886,8 @@ if "sched_bytes" in st.session_state:
                                     "In Call Duration":     "00:00:00",
                                     "Total Active in Slot": "00:00:00",
                                     "AUX Breakdown":        "No activity",
+                                    "Inbound Handled":      0,
+                                    "Outbound Handled":     0,
                                 })
                             else:
                                 overlap["_es"] = overlap[login_col].clip(lower=q_s, upper=q_e)
@@ -901,6 +907,28 @@ if "sched_bytes" in st.session_state:
                                     f"{k}: {fmt_duration(v)}" for k, v in aux_grp.items()
                                 )
 
+                                if aux_col:
+                                    _aux_blank = (
+                                        overlap[aux_col].isna() |
+                                        (overlap[aux_col].astype(str).str.strip() == "")
+                                    )
+                                else:
+                                    _aux_blank = pd.Series(True, index=overlap.index)
+                                if skill_col:
+                                    _skill_pop = (
+                                        overlap[skill_col].notna() &
+                                        (overlap[skill_col].astype(str).str.strip() != "")
+                                    )
+                                    _call_mask = _aux_blank & _skill_pop
+                                    _outbound_cnt = int(
+                                        overlap.loc[_call_mask, skill_col]
+                                        .fillna("").str.lower()
+                                        .str.contains("outbond|outbound", na=False).sum()
+                                    )
+                                    _inbound_cnt = int(_call_mask.sum()) - _outbound_cnt
+                                else:
+                                    _inbound_cnt = _outbound_cnt = 0
+
                                 status = (
                                     "✅ Logged In - On Calls"
                                     if in_call_secs > 0
@@ -912,6 +940,8 @@ if "sched_bytes" in st.session_state:
                                     "In Call Duration":     fmt_duration(in_call_secs),
                                     "Total Active in Slot": fmt_duration(total_secs),
                                     "AUX Breakdown":        aux_str,
+                                    "Inbound Handled":      _inbound_cnt,
+                                    "Outbound Handled":     _outbound_cnt,
                                 })
 
                     done += 1
@@ -1123,6 +1153,8 @@ if "sched_bytes" in st.session_state:
                         _slot_cnt       = ("Scheduled Slot",  "count"),
                         _in3_secs       = ("_in3_secs",       "sum"),
                         _committed_secs = ("_committed_secs", "sum"),
+                        _inbound        = ("Inbound Handled",  "sum"),
+                        _outbound       = ("Outbound Handled", "sum"),
                     )
                     .reset_index()
                 )
@@ -1137,7 +1169,7 @@ if "sched_bytes" in st.session_state:
                     if not isinstance(_key3, tuple):
                         _key3 = (_key3,)
                     _r3 = dict(zip(_idx_cols_piv, _key3))
-                    _ttl_cnt = _ttl_in = _ttl_comm = 0
+                    _ttl_cnt = _ttl_in = _ttl_comm = _ttl_inb = _ttl_outb = 0
                     for _d3 in _piv3_dates:
                         _dg3   = _g3[_g3["Date (IST)"] == _d3]
                         _cnt3  = int(_dg3["_slot_cnt"].sum())
@@ -1149,6 +1181,8 @@ if "sched_bytes" in st.session_state:
                         _ttl_cnt  += _cnt3
                         _ttl_in   += _in3
                         _ttl_comm += _comm3
+                        _ttl_inb  += int(_dg3["_inbound"].sum())
+                        _ttl_outb += int(_dg3["_outbound"].sum())
                     _r3["Total Count of Scheduled Slot"] = _ttl_cnt
                     _r3["Total Scheduled Hrs"]           = fmt_duration(_ttl_comm)
                     _r3["Total Sum of In Call Duration"]  = fmt_duration(_ttl_in)
@@ -1156,6 +1190,8 @@ if "sched_bytes" in st.session_state:
                         f"{_ttl_in / _ttl_comm * 100:.1f}%"
                         if _ttl_comm > 0 else "0.0%"
                     )
+                    _r3["Inbound Handled"]  = _ttl_inb
+                    _r3["Outbound Handled"] = _ttl_outb
                     _piv3_rows.append(_r3)
 
                 _piv3 = pd.DataFrame(_piv3_rows) if _piv3_rows else pd.DataFrame()
@@ -1171,6 +1207,8 @@ if "sched_bytes" in st.session_state:
                             _slot_cnt       = ("Scheduled Slot",  "count"),
                             _in3_secs       = ("_in3_secs",       "sum"),
                             _committed_secs = ("_committed_secs", "sum"),
+                            _inbound        = ("Inbound Handled",  "sum"),
+                            _outbound       = ("Outbound Handled", "sum"),
                         )
                         .reset_index()
                     )
@@ -1181,7 +1219,7 @@ if "sched_bytes" in st.session_state:
                     _piv3s_rows = []
                     for _sup3, _gs3 in _grp3_sup.groupby("Supervisor", sort=True):
                         _rs3 = {"Supervisor": _sup3}
-                        _ts_cnt = _ts_in = _ts_comm = 0
+                        _ts_cnt = _ts_in = _ts_comm = _ts_inb = _ts_outb = 0
                         for _ds3 in _piv3s_dates:
                             _dgs3 = _gs3[_gs3["Date (IST)"] == _ds3]
                             _cs3  = int(_dgs3["_slot_cnt"].sum())
@@ -1193,6 +1231,8 @@ if "sched_bytes" in st.session_state:
                             _ts_cnt  += _cs3
                             _ts_in   += _is3
                             _ts_comm += _co3
+                            _ts_inb  += int(_dgs3["_inbound"].sum())
+                            _ts_outb += int(_dgs3["_outbound"].sum())
                         _rs3["Total Count of Scheduled Slot"] = _ts_cnt
                         _rs3["Total Scheduled Hrs"]           = fmt_duration(_ts_comm)
                         _rs3["Total Sum of In Call Duration"]  = fmt_duration(_ts_in)
@@ -1200,6 +1240,8 @@ if "sched_bytes" in st.session_state:
                             f"{_ts_in / _ts_comm * 100:.1f}%"
                             if _ts_comm > 0 else "0.0%"
                         )
+                        _rs3["Inbound Handled"]  = _ts_inb
+                        _rs3["Outbound Handled"] = _ts_outb
                         _piv3s_rows.append(_rs3)
                     _piv3_sup = pd.DataFrame(_piv3s_rows) if _piv3s_rows else pd.DataFrame()
                     st.dataframe(_piv3_sup, use_container_width=True, hide_index=True)
@@ -1296,6 +1338,11 @@ if "sched_bytes" in st.session_state:
                             writer, sheet_name="Out-of-Slot Logins", index=False
                         )
                         _style_ws(writer.sheets["Out-of-Slot Logins"], pct_col=None)
+
+                    df.to_excel(writer, sheet_name="Raw - Login Data", index=False)
+                    _style_ws(writer.sheets["Raw - Login Data"], pct_col=None)
+                    sched_df.to_excel(writer, sheet_name="Raw - Schedule", index=False)
+                    _style_ws(writer.sheets["Raw - Schedule"], pct_col=None)
 
                 st.download_button(
                     "📥 Download Compliance Report (Excel)",
