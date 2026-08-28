@@ -757,14 +757,22 @@ if "sched_bytes" in st.session_state:
 
             records = []
             out_records = []
-            total_ops = max(len(sched_raw) * len(check_dates), 1)
+            total_ops = max(len(sched_raw), 1)
             prog = st.progress(0.0, text="Generating report…")
             done = 0
+
+            # Pre-compute login date and group by (agent, date) for O(1) lookup
+            df["_login_date"] = df[login_col].dt.date
+            _empty_login_df  = df.iloc[0:0]
+            _login_lookup    = {
+                key: grp
+                for key, grp in df.groupby([agent_col, "_login_date"], sort=False)
+            }
 
             for _, sched_row in sched_raw.iterrows():
                 sched_agent = str(sched_row[sched_agent_col]).strip()
                 if not sched_agent or sched_agent.lower() == "nan":
-                    done += len(check_dates)
+                    done += 1
                     prog.progress(min(done / total_ops, 1.0))
                     continue
 
@@ -773,8 +781,6 @@ if "sched_bytes" in st.session_state:
                     if sched_sup_col and pd.notna(sched_row.get(sched_sup_col))
                     else ""
                 )
-                agent_login = df[df[agent_col] == sched_agent]
-
                 for check_date in check_dates:
                     dow_short = _wd_to_dow[check_date.weekday()]
 
@@ -802,7 +808,7 @@ if "sched_bytes" in st.session_state:
                             "Inbound Handled":      0,
                             "Outbound Handled":     0,
                         })
-                        wo_rows = agent_login[agent_login[login_col].dt.date == check_date]
+                        wo_rows = _login_lookup.get((sched_agent, check_date), _empty_login_df)
                         for _, lrow in wo_rows.iterrows():
                             if not is_working_aux(lrow["_aux_label"]):
                                 continue
@@ -840,7 +846,7 @@ if "sched_bytes" in st.session_state:
                             q_s = datetime.combine(check_date, s_time)
                             q_e = datetime.combine(check_date, e_time)
 
-                            day_rows = agent_login[agent_login[login_col].dt.date == check_date]
+                            day_rows = _login_lookup.get((sched_agent, check_date), _empty_login_df)
                             overlap  = day_rows[
                                 (day_rows[login_col] < q_e) & (day_rows[logout_col] > q_s)
                             ].copy()
@@ -919,11 +925,11 @@ if "sched_bytes" in st.session_state:
                                         overlap[skill_col].notna() &
                                         (overlap[skill_col].astype(str).str.strip() != "")
                                     )
-                                    _dur_ok = (
-                                        overlap[dur_default].apply(_is_nonzero)
-                                        if dur_default and dur_default in overlap.columns
-                                        else pd.Series(True, index=overlap.index)
-                                    )
+                                    if dur_default and dur_default in overlap.columns:
+                                        _dur_s  = overlap[dur_default].fillna("").astype(str).str.strip().str.lower()
+                                        _dur_ok = ~_dur_s.isin(["", "0", "nan", "none", "-", "00:00:00", "00:00", "0:00:00"])
+                                    else:
+                                        _dur_ok = pd.Series(True, index=overlap.index)
                                     _call_mask = _aux_blank & _skill_pop & _dur_ok
                                     _outbound_cnt = int(
                                         overlap.loc[_call_mask, skill_col]
@@ -949,8 +955,8 @@ if "sched_bytes" in st.session_state:
                                     "Outbound Handled":     _outbound_cnt,
                                 })
 
-                    done += 1
-                    prog.progress(min(done / total_ops, 1.0))
+                done += 1
+                prog.progress(min(done / total_ops, 1.0))
 
             prog.empty()
 
