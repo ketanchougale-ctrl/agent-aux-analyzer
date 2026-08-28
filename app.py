@@ -125,7 +125,7 @@ def _clear_from_disk(key: str) -> None:
 
 
 # ── Excel formatting helpers ──────────────────────────────────────────────────
-def _style_ws(ws, pct_col="Compliance %"):
+def _style_ws(ws, pct_col="Compliance %", has_total_row=False):
     HDR_FILL   = PatternFill("solid", fgColor="2E75B6")
     ALT_FILL   = PatternFill("solid", fgColor="DCE6F1")
     HDR_FONT   = Font(bold=True, color="FFFFFF", size=10)
@@ -133,13 +133,14 @@ def _style_ws(ws, pct_col="Compliance %"):
     RED_FILL   = PatternFill("solid", fgColor="FFC7CE")
     GREEN_FONT = Font(color="276221", bold=True)
     RED_FONT   = Font(color="9C0006", bold=True)
-    max_row = ws.max_row
+    max_row  = ws.max_row
+    data_end = max_row - 1 if has_total_row else max_row
     for cell in ws[1]:
         cell.font      = HDR_FONT
         cell.fill      = HDR_FILL
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws.row_dimensions[1].height = 28
-    for r in range(2, max_row + 1):
+    for r in range(2, data_end + 1):
         for cell in ws[r]:
             cell.alignment = Alignment(horizontal="center", vertical="center")
             if r % 2 == 0:
@@ -149,14 +150,14 @@ def _style_ws(ws, pct_col="Compliance %"):
         w  = max((len(str(c.value)) if c.value is not None else 0) for c in col)
         ws.column_dimensions[cl].width = min(max(w + 3, 10), 42)
     ws.freeze_panes = "A2"
+    pct_cl = None
     if pct_col:
-        pct_cl = None
         for cell in ws[1]:
             if cell.value == pct_col:
                 pct_cl = get_column_letter(cell.column)
                 break
         if pct_cl:
-            rng = f"{pct_cl}2:{pct_cl}{max_row}"
+            rng = f"{pct_cl}2:{pct_cl}{data_end}"
             ws.conditional_formatting.add(
                 rng, CellIsRule(operator="greaterThanOrEqual", formula=["0.7"],
                                 fill=GREEN_FILL, font=GREEN_FONT))
@@ -165,15 +166,21 @@ def _style_ws(ws, pct_col="Compliance %"):
                                 fill=RED_FILL, font=RED_FONT))
             for r in range(2, max_row + 1):
                 ws[f"{pct_cl}{r}"].number_format = "0.0%"
+    if has_total_row and max_row >= 2:
+        for cell in ws[max_row]:
+            cell.font      = HDR_FONT
+            cell.fill      = HDR_FILL
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[max_row].height = 22
 
 
-def _add_bar_chart(ws, name_col, title):
+def _add_bar_chart(ws, name_col, title, exclude_last=False):
     hdr = [cell.value for cell in ws[1]]
     if "Compliance %" not in hdr or name_col not in hdr:
         return
     pct_idx  = hdr.index("Compliance %") + 1
     name_idx = hdr.index(name_col) + 1
-    max_row  = ws.max_row
+    max_row  = ws.max_row - 1 if exclude_last else ws.max_row
     chart = BarChart()
     chart.type      = "bar"
     chart.grouping  = "clustered"
@@ -1106,16 +1113,45 @@ if "sched_bytes" in st.session_state:
                     _style_ws(writer.sheets["Compliance Report"], pct_col=None)
 
                     if not sup_summary.empty:
-                        sup_summary.to_excel(writer, sheet_name="Supervisor Summary", index=False)
-                        _style_ws(writer.sheets["Supervisor Summary"])
+                        _sup_on  = int(sup_summary["✅ On Calls"].sum())
+                        _sup_tot = int(sup_summary["Scheduled Slots"].sum())
+                        _sup_xl  = pd.concat([
+                            sup_summary,
+                            pd.DataFrame([{
+                                "Supervisor":      "Total",
+                                "Agents":          int(sup_summary["Agents"].sum()),
+                                "Scheduled Slots": _sup_tot,
+                                "✅ On Calls":      _sup_on,
+                                "⚠️ No Calls":      int(sup_summary["⚠️ No Calls"].sum()),
+                                "❌ Not Logged In": int(sup_summary["❌ Not Logged In"].sum()),
+                                "Compliance %":    _sup_on / _sup_tot if _sup_tot > 0 else 0.0,
+                            }])
+                        ], ignore_index=True)
+                        _sup_xl.to_excel(writer, sheet_name="Supervisor Summary", index=False)
+                        _style_ws(writer.sheets["Supervisor Summary"], has_total_row=True)
                         _add_bar_chart(writer.sheets["Supervisor Summary"],
-                                       "Supervisor", "Supervisor Compliance %")
+                                       "Supervisor", "Supervisor Compliance %",
+                                       exclude_last=True)
 
                     if len(non_wo) > 0:
-                        agent_summary.to_excel(writer, sheet_name="Agent Summary", index=False)
-                        _style_ws(writer.sheets["Agent Summary"])
+                        _ag_on  = int(agent_summary["✅ On Calls"].sum())
+                        _ag_tot = int(agent_summary["Scheduled Days"].sum())
+                        _ag_xl  = pd.concat([
+                            agent_summary,
+                            pd.DataFrame([{
+                                "Agent Name":      "Total",
+                                "Scheduled Days":  _ag_tot,
+                                "✅ On Calls":      _ag_on,
+                                "⚠️ No Calls":      int(agent_summary["⚠️ No Calls"].sum()),
+                                "❌ Not Logged In": int(agent_summary["❌ Not Logged In"].sum()),
+                                "Compliance %":    _ag_on / _ag_tot if _ag_tot > 0 else 0.0,
+                            }])
+                        ], ignore_index=True)
+                        _ag_xl.to_excel(writer, sheet_name="Agent Summary", index=False)
+                        _style_ws(writer.sheets["Agent Summary"], has_total_row=True)
                         _add_bar_chart(writer.sheets["Agent Summary"],
-                                       "Agent Name", "Agent Compliance %")
+                                       "Agent Name", "Agent Compliance %",
+                                       exclude_last=True)
 
                     if not _piv_combined.empty:
                         _piv_combined.to_excel(writer, sheet_name="Summary Pivot", index=False)
