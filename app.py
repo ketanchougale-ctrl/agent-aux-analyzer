@@ -1364,9 +1364,7 @@ if "sched_bytes" in st.session_state:
                         )
                         _style_ws(writer.sheets["Out-of-Slot Logins"], pct_col=None)
 
-                    df.to_excel(writer, sheet_name="Raw - Login Data", index=False)
-                    _style_ws(writer.sheets["Raw - Login Data"], pct_col=None)
-                    sched_df.to_excel(writer, sheet_name="Raw - Schedule", index=False)
+                    sched_raw.to_excel(writer, sheet_name="Raw - Schedule", index=False)
                     _style_ws(writer.sheets["Raw - Schedule"], pct_col=None)
 
                 st.download_button(
