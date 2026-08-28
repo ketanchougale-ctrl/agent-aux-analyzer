@@ -135,21 +135,33 @@ def _style_ws(ws, pct_col="Compliance %", has_total_row=False):
     RED_FONT   = Font(color="9C0006", bold=True)
     max_row  = ws.max_row
     data_end = max_row - 1 if has_total_row else max_row
+    large    = max_row > 400          # skip heavy per-cell loops for large sheets
+
+    # Header — always applied
     for cell in ws[1]:
         cell.font      = HDR_FONT
         cell.fill      = HDR_FILL
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws.row_dimensions[1].height = 28
-    for r in range(2, data_end + 1):
-        for cell in ws[r]:
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            if r % 2 == 0:
-                cell.fill = ALT_FILL
-    for col in ws.iter_cols(min_row=1, max_row=max_row):
+
+    # Alternating row fill — skip for large sheets (too slow in openpyxl)
+    if not large:
+        for r in range(2, data_end + 1):
+            for cell in ws[r]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                if r % 2 == 0:
+                    cell.fill = ALT_FILL
+
+    # Column widths — sample first 200 rows only for large sheets
+    scan_end = min(max_row, 200) if large else max_row
+    for col in ws.iter_cols(min_row=1, max_row=scan_end):
         cl = get_column_letter(col[0].column)
         w  = max((len(str(c.value)) if c.value is not None else 0) for c in col)
         ws.column_dimensions[cl].width = min(max(w + 3, 10), 42)
+
     ws.freeze_panes = "A2"
+
+    # Compliance % conditional formatting
     pct_cl = None
     if pct_col:
         for cell in ws[1]:
@@ -166,6 +178,8 @@ def _style_ws(ws, pct_col="Compliance %", has_total_row=False):
                                 fill=RED_FILL, font=RED_FONT))
             for r in range(2, max_row + 1):
                 ws[f"{pct_cl}{r}"].number_format = "0.0%"
+
+    # Total row — always applied
     if has_total_row and max_row >= 2:
         for cell in ws[max_row]:
             cell.font      = HDR_FONT
