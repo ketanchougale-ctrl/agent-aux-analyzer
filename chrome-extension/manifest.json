@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent AUX Analyzer",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Launch the CS Agent AUX Code Analyzer running on localhost:8501",
   "action": {
     "default_popup": "popup.html",
@@ -12,7 +12,11 @@
     },
     "default_title": "Agent AUX Analyzer"
   },
+  "background": {
+    "service_worker": "background.js"
+  },
   "permissions": ["tabs"],
+  "host_permissions": ["http://localhost:8501/*"],
   "icons": {
     "16":  "icons/icon16.png",
     "48":  "icons/icon48.png",

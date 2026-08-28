@@ -1,9 +1,11 @@
-const APP_URL = "http://localhost:8501";
+const APP_URL  = "http://localhost:8501";
 
-const pill       = document.getElementById("pill");
-const pillText   = document.getElementById("pill-text");
-const btnOpen    = document.getElementById("btnOpen");
-const alertBox   = document.getElementById("alertOffline");
+const pill     = document.getElementById("pill");
+const pillText = document.getElementById("pill-text");
+const btnOpen  = document.getElementById("btnOpen");
+const alertBox = document.getElementById("alertOffline");
+
+let _online = false;
 
 function setOnline() {
   pill.className = "pill pill-online";
@@ -11,6 +13,7 @@ function setOnline() {
   pill.querySelector(".dot").classList.remove("pulse");
   alertBox.style.display = "none";
   btnOpen.disabled = false;
+  _online = true;
 }
 
 function setOffline() {
@@ -18,18 +21,15 @@ function setOffline() {
   pillText.textContent = "Offline";
   pill.querySelector(".dot").classList.remove("pulse");
   alertBox.style.display = "block";
-  btnOpen.disabled = false; // still allow opening (user may want to try)
+  btnOpen.disabled = false;
+  _online = false;
 }
 
 async function checkServer() {
   try {
-    const ctrl = new AbortController();
+    const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 3000);
-    const res = await fetch(APP_URL, {
-      method: "GET",
-      mode: "no-cors",
-      signal: ctrl.signal,
-    });
+    await fetch(APP_URL, { method: "GET", mode: "no-cors", signal: ctrl.signal });
     clearTimeout(timer);
     setOnline();
   } catch {
@@ -37,14 +37,11 @@ async function checkServer() {
   }
 }
 
-btnOpen.addEventListener("click", async () => {
-  const tabs = await chrome.tabs.query({ url: `${APP_URL}/*` });
-  if (tabs.length > 0) {
-    await chrome.tabs.update(tabs[0].id, { active: true });
-    const win = await chrome.windows.get(tabs[0].windowId);
-    chrome.windows.update(win.id, { focused: true });
+btnOpen.addEventListener("click", () => {
+  if (_online) {
+    chrome.runtime.sendMessage({ action: "openApp" });
   } else {
-    chrome.tabs.create({ url: APP_URL });
+    chrome.runtime.sendMessage({ action: "startAndOpen" });
   }
   window.close();
 });
