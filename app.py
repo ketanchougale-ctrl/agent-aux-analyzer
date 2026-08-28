@@ -23,7 +23,7 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        .block-container { padding-top: 1.5rem; }
+        .block-container { padding-top: 4rem; }
         .main-title {
             font-size: 2rem;
             font-weight: 700;
@@ -130,8 +130,10 @@ def _style_ws(ws, pct_col="Compliance %", has_total_row=False):
     ALT_FILL   = PatternFill("solid", fgColor="DCE6F1")
     HDR_FONT   = Font(bold=True, color="FFFFFF", size=10)
     GREEN_FILL = PatternFill("solid", fgColor="C6EFCE")
+    AMBER_FILL = PatternFill("solid", fgColor="FFEB9C")
     RED_FILL   = PatternFill("solid", fgColor="FFC7CE")
     GREEN_FONT = Font(color="276221", bold=True)
+    AMBER_FONT = Font(color="9C5700", bold=True)
     RED_FONT   = Font(color="9C0006", bold=True)
     max_row  = ws.max_row
     data_end = max_row - 1 if has_total_row else max_row
@@ -174,7 +176,10 @@ def _style_ws(ws, pct_col="Compliance %", has_total_row=False):
                 rng, CellIsRule(operator="greaterThanOrEqual", formula=["0.7"],
                                 fill=GREEN_FILL, font=GREEN_FONT))
             ws.conditional_formatting.add(
-                rng, CellIsRule(operator="lessThan", formula=["0.7"],
+                rng, CellIsRule(operator="between", formula=["0.5", "0.6999"],
+                                fill=AMBER_FILL, font=AMBER_FONT))
+            ws.conditional_formatting.add(
+                rng, CellIsRule(operator="lessThan", formula=["0.5"],
                                 fill=RED_FILL, font=RED_FONT))
             for r in range(2, max_row + 1):
                 ws[f"{pct_cl}{r}"].number_format = "0.0%"
@@ -1212,8 +1217,8 @@ if "sched_bytes" in st.session_state:
                     _r3["Total Scheduled Hrs"]           = fmt_duration(_ttl_comm)
                     _r3["Total Sum of In Call Duration"]  = fmt_duration(_ttl_in)
                     _r3["Compliance %"] = (
-                        f"{_ttl_in / _ttl_comm * 100:.1f}%"
-                        if _ttl_comm > 0 else "0.0%"
+                        _ttl_in / _ttl_comm
+                        if _ttl_comm > 0 else 0.0
                     )
                     _r3["Inbound Handled"]  = _ttl_inb
                     _r3["Outbound Handled"] = _ttl_outb
@@ -1262,8 +1267,8 @@ if "sched_bytes" in st.session_state:
                         _rs3["Total Scheduled Hrs"]           = fmt_duration(_ts_comm)
                         _rs3["Total Sum of In Call Duration"]  = fmt_duration(_ts_in)
                         _rs3["Compliance %"] = (
-                            f"{_ts_in / _ts_comm * 100:.1f}%"
-                            if _ts_comm > 0 else "0.0%"
+                            _ts_in / _ts_comm
+                            if _ts_comm > 0 else 0.0
                         )
                         _rs3["Inbound Handled"]  = _ts_inb
                         _rs3["Outbound Handled"] = _ts_outb
@@ -1352,11 +1357,11 @@ if "sched_bytes" in st.session_state:
 
                     if not _piv3.empty:
                         _piv3.to_excel(writer, sheet_name="Hrs vs Committed", index=False)
-                        _style_ws(writer.sheets["Hrs vs Committed"], pct_col=None)
+                        _style_ws(writer.sheets["Hrs vs Committed"], pct_col="Compliance %")
 
                     if not _piv3_sup.empty:
                         _piv3_sup.to_excel(writer, sheet_name="Sup Hrs vs Committed", index=False)
-                        _style_ws(writer.sheets["Sup Hrs vs Committed"], pct_col=None)
+                        _style_ws(writer.sheets["Sup Hrs vs Committed"], pct_col="Compliance %")
 
                     if out_records:
                         pd.DataFrame(out_records).to_excel(
