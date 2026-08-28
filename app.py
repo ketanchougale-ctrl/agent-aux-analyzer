@@ -1084,6 +1084,73 @@ if "sched_bytes" in st.session_state:
                 )
                 st.dataframe(_piv_combined, use_container_width=True, hide_index=True)
 
+                # ── Hrs Logged vs Committed Hrs Pivot ─────────────────────────────
+                st.markdown("##### ⏱️ Hrs Logged vs Committed Hrs Pivot")
+                st.caption(
+                    "For each date: **Count of Scheduled Slots** and **Sum of In Call Duration** (all working AUX). "
+                    "**Compliance %** = Total In Call Duration ÷ Total Committed (scheduled slot) hours."
+                )
+
+                def _slot_secs(slot_str):
+                    try:
+                        _p = parse_time_slot(str(slot_str).strip())
+                        if _p is None:
+                            return 0
+                        _dummy = date(2000, 1, 1)
+                        return max(0, (
+                            datetime.combine(_dummy, _p[1]) - datetime.combine(_dummy, _p[0])
+                        ).total_seconds())
+                    except Exception:
+                        return 0
+
+                _pdata3 = report_df[
+                    ~report_df["Status"].str.startswith("📅", na=False)
+                ].copy()
+                _pdata3["_in3_secs"]       = _pdata3["In Call Duration"].apply(_parse_hms)
+                _pdata3["_committed_secs"] = _pdata3["Scheduled Slot"].apply(_slot_secs)
+
+                _grp3 = (
+                    _pdata3
+                    .groupby(_idx_cols_piv + ["Date (IST)"], sort=True)
+                    .agg(
+                        _slot_cnt       = ("Scheduled Slot",  "count"),
+                        _in3_secs       = ("_in3_secs",       "sum"),
+                        _committed_secs = ("_committed_secs", "sum"),
+                    )
+                    .reset_index()
+                )
+
+                _piv3_dates = sorted(
+                    _grp3["Date (IST)"].unique(),
+                    key=lambda _d: datetime.strptime(_d, "%d-%b-%Y"),
+                )
+
+                _piv3_rows = []
+                for _key3, _g3 in _grp3.groupby(_idx_cols_piv, sort=True):
+                    if not isinstance(_key3, tuple):
+                        _key3 = (_key3,)
+                    _r3 = dict(zip(_idx_cols_piv, _key3))
+                    _ttl_cnt = _ttl_in = _ttl_comm = 0
+                    for _d3 in _piv3_dates:
+                        _dg3  = _g3[_g3["Date (IST)"] == _d3]
+                        _cnt3 = int(_dg3["_slot_cnt"].sum())
+                        _in3  = int(_dg3["_in3_secs"].sum())
+                        _r3[f"{_d3} | Count of Scheduled Slot"] = _cnt3
+                        _r3[f"{_d3} | Sum of In Call Duration"]  = fmt_duration(_in3)
+                        _ttl_cnt  += _cnt3
+                        _ttl_in   += _in3
+                        _ttl_comm += int(_dg3["_committed_secs"].sum())
+                    _r3["Total Count of Scheduled Slot"] = _ttl_cnt
+                    _r3["Total Sum of In Call Duration"]  = fmt_duration(_ttl_in)
+                    _r3["Compliance %"] = (
+                        f"{_ttl_in / _ttl_comm * 100:.1f}%"
+                        if _ttl_comm > 0 else "0.0%"
+                    )
+                    _piv3_rows.append(_r3)
+
+                _piv3 = pd.DataFrame(_piv3_rows) if _piv3_rows else pd.DataFrame()
+                st.dataframe(_piv3, use_container_width=True, hide_index=True)
+
                 # ── Detailed table ──────────────────────────────────────────────────
                 st.markdown("##### Detailed Compliance Records")
                 st.dataframe(report_df, use_container_width=True, hide_index=True)
@@ -1156,6 +1223,10 @@ if "sched_bytes" in st.session_state:
                     if not _piv_combined.empty:
                         _piv_combined.to_excel(writer, sheet_name="Summary Pivot", index=False)
                         _style_ws(writer.sheets["Summary Pivot"], pct_col=None)
+
+                    if not _piv3.empty:
+                        _piv3.to_excel(writer, sheet_name="Hrs vs Committed", index=False)
+                        _style_ws(writer.sheets["Hrs vs Committed"], pct_col=None)
 
                     if out_records:
                         pd.DataFrame(out_records).to_excel(
