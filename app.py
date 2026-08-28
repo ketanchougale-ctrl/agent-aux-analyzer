@@ -126,7 +126,7 @@ def _clear_from_disk(key: str) -> None:
 
 # ── Excel formatting helpers ──────────────────────────────────────────────────
 def _style_ws(ws, pct_col="Compliance %"):
-    HDR_FILL   = PatternFill("solid", fgColor="1F3864")
+    HDR_FILL   = PatternFill("solid", fgColor="2E75B6")
     ALT_FILL   = PatternFill("solid", fgColor="DCE6F1")
     HDR_FONT   = Font(bold=True, color="FFFFFF", size=10)
     GREEN_FILL = PatternFill("solid", fgColor="C6EFCE")
