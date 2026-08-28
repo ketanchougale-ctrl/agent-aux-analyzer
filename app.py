@@ -5,6 +5,10 @@ import pandas as pd
 import io
 import plotly.express as px
 from datetime import datetime, date, time, timedelta
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import CellIsRule
+from openpyxl.chart import BarChart, Reference
 
 st.set_page_config(
     page_title="Agent AUX Analyzer",
@@ -118,6 +122,73 @@ def _clear_from_disk(key: str) -> None:
         p = _CACHE_DIR / f"{key}{suffix}"
         if p.exists():
             p.unlink()
+
+
+# ── Excel formatting helpers ──────────────────────────────────────────────────
+def _style_ws(ws, pct_col="Compliance %"):
+    HDR_FILL   = PatternFill("solid", fgColor="1F3864")
+    ALT_FILL   = PatternFill("solid", fgColor="DCE6F1")
+    HDR_FONT   = Font(bold=True, color="FFFFFF", size=10)
+    GREEN_FILL = PatternFill("solid", fgColor="C6EFCE")
+    RED_FILL   = PatternFill("solid", fgColor="FFC7CE")
+    GREEN_FONT = Font(color="276221", bold=True)
+    RED_FONT   = Font(color="9C0006", bold=True)
+    max_row = ws.max_row
+    for cell in ws[1]:
+        cell.font      = HDR_FONT
+        cell.fill      = HDR_FILL
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[1].height = 28
+    for r in range(2, max_row + 1):
+        for cell in ws[r]:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            if r % 2 == 0:
+                cell.fill = ALT_FILL
+    for col in ws.iter_cols(min_row=1, max_row=max_row):
+        cl = get_column_letter(col[0].column)
+        w  = max((len(str(c.value)) if c.value is not None else 0) for c in col)
+        ws.column_dimensions[cl].width = min(max(w + 3, 10), 42)
+    ws.freeze_panes = "A2"
+    if pct_col:
+        pct_cl = None
+        for cell in ws[1]:
+            if cell.value == pct_col:
+                pct_cl = get_column_letter(cell.column)
+                break
+        if pct_cl:
+            rng = f"{pct_cl}2:{pct_cl}{max_row}"
+            ws.conditional_formatting.add(
+                rng, CellIsRule(operator="greaterThanOrEqual", formula=["0.7"],
+                                fill=GREEN_FILL, font=GREEN_FONT))
+            ws.conditional_formatting.add(
+                rng, CellIsRule(operator="lessThan", formula=["0.7"],
+                                fill=RED_FILL, font=RED_FONT))
+            for r in range(2, max_row + 1):
+                ws[f"{pct_cl}{r}"].number_format = "0.0%"
+
+
+def _add_bar_chart(ws, name_col, title):
+    hdr = [cell.value for cell in ws[1]]
+    if "Compliance %" not in hdr or name_col not in hdr:
+        return
+    pct_idx  = hdr.index("Compliance %") + 1
+    name_idx = hdr.index(name_col) + 1
+    max_row  = ws.max_row
+    chart = BarChart()
+    chart.type      = "bar"
+    chart.grouping  = "clustered"
+    chart.title     = title
+    chart.style     = 2
+    chart.height    = max(8, min(20, (max_row - 1) * 0.6 + 5))
+    chart.width     = 18
+    chart.y_axis.title = name_col
+    chart.x_axis.title = "Compliance %"
+    data_ref = Reference(ws, min_col=pct_idx, min_row=1, max_row=max_row)
+    cats_ref = Reference(ws, min_col=name_idx, min_row=2, max_row=max_row)
+    chart.add_data(data_ref, titles_from_data=True)
+    chart.set_categories(cats_ref)
+    anchor = get_column_letter(ws.max_column + 2) + "2"
+    ws.add_chart(chart, anchor)
 
 
 WORKING_AUX: set[str] = {
@@ -481,12 +552,15 @@ else:
     st.markdown("#### 💾 Export")
 
     out_buf = io.BytesIO()
+    _show_clean = show_df.loc[:, ~show_df.columns.str.startswith("Unnamed:")].copy()
     with pd.ExcelWriter(out_buf, engine="openpyxl") as writer:
-        show_df.to_excel(writer, sheet_name="Filtered Records", index=False)
+        _show_clean.to_excel(writer, sheet_name="Filtered Records", index=False)
+        _style_ws(writer.sheets["Filtered Records"], pct_col=None)
         if aux_col or skill_col:
             summary[["AUX Code", "Duration (HH:MM:SS)", "Minutes", "% of Slot"]].to_excel(
                 writer, sheet_name="AUX Summary", index=False
             )
+            _style_ws(writer.sheets["AUX Summary"], pct_col=None)
 
     file_label = (
         f"AUX_{sel_agent.replace(' ', '_').replace(',', '')}_{sel_date}"
@@ -874,12 +948,14 @@ if "sched_bytes" in st.session_state:
                             "✅ On Calls":      _on,
                             "⚠️ No Calls":      _nc,
                             "❌ Not Logged In": _ni,
-                            "Compliance %":    f"{_on / _tot * 100:.1f}%" if _tot > 0 else "0.0%",
+                            "Compliance %":    round(_on / _tot, 4) if _tot > 0 else 0.0,
                         })
                     agent_summary = pd.DataFrame(_stats)
 
                     st.markdown("##### Agent Summary")
-                    st.dataframe(agent_summary, use_container_width=True, hide_index=True)
+                    _ag_disp = agent_summary.copy()
+                    _ag_disp["Compliance %"] = _ag_disp["Compliance %"].apply(lambda x: f"{x:.1%}")
+                    st.dataframe(_ag_disp, use_container_width=True, hide_index=True)
 
                 # ── Supervisor summary ───────────────────────────────────────────
                 sup_summary = pd.DataFrame()
@@ -897,11 +973,13 @@ if "sched_bytes" in st.session_state:
                             "✅ On Calls":      _son,
                             "⚠️ No Calls":      _snc,
                             "❌ Not Logged In": _sni,
-                            "Compliance %":    f"{_son / _stot * 100:.1f}%" if _stot > 0 else "0.0%",
+                            "Compliance %":    round(_son / _stot, 4) if _stot > 0 else 0.0,
                         })
                     sup_summary = pd.DataFrame(_ss)
                     st.markdown("##### 👔 Supervisor Summary")
-                    st.dataframe(sup_summary, use_container_width=True, hide_index=True)
+                    _sup_disp = sup_summary.copy()
+                    _sup_disp["Compliance %"] = _sup_disp["Compliance %"].apply(lambda x: f"{x:.1%}")
+                    st.dataframe(_sup_disp, use_container_width=True, hide_index=True)
 
                 # ── Overall Summary Pivot ─────────────────────────────────────────
                 st.markdown("##### 📊 Overall Summary Pivot")
@@ -1021,20 +1099,33 @@ if "sched_bytes" in st.session_state:
                 else:
                     st.success("✅ No out-of-slot login activity detected.")
 
-                # ── Export ────────────────────────────────────────────────────
+                # ── Export ──────────────────────────────────────────────────
                 out2 = io.BytesIO()
                 with pd.ExcelWriter(out2, engine="openpyxl") as writer:
                     report_df.to_excel(writer, sheet_name="Compliance Report", index=False)
+                    _style_ws(writer.sheets["Compliance Report"], pct_col=None)
+
                     if not sup_summary.empty:
                         sup_summary.to_excel(writer, sheet_name="Supervisor Summary", index=False)
+                        _style_ws(writer.sheets["Supervisor Summary"])
+                        _add_bar_chart(writer.sheets["Supervisor Summary"],
+                                       "Supervisor", "Supervisor Compliance %")
+
                     if len(non_wo) > 0:
                         agent_summary.to_excel(writer, sheet_name="Agent Summary", index=False)
+                        _style_ws(writer.sheets["Agent Summary"])
+                        _add_bar_chart(writer.sheets["Agent Summary"],
+                                       "Agent Name", "Agent Compliance %")
+
                     if not _piv_combined.empty:
                         _piv_combined.to_excel(writer, sheet_name="Summary Pivot", index=False)
+                        _style_ws(writer.sheets["Summary Pivot"], pct_col=None)
+
                     if out_records:
                         pd.DataFrame(out_records).to_excel(
                             writer, sheet_name="Out-of-Slot Logins", index=False
                         )
+                        _style_ws(writer.sheets["Out-of-Slot Logins"], pct_col=None)
 
                 st.download_button(
                     "📥 Download Compliance Report (Excel)",
