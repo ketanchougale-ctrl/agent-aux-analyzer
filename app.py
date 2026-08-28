@@ -776,6 +776,7 @@ if "sched_bytes" in st.session_state:
 
             records = []
             out_records = []
+            aux_detail_records = []
             total_ops = max(len(sched_raw), 1)
             prog = st.progress(0.0, text="Generating report…")
             done = 0
@@ -931,6 +932,13 @@ if "sched_bytes" in st.session_state:
                                 aux_str = "; ".join(
                                     f"{k}: {fmt_duration(v)}" for k, v in aux_grp.items()
                                 )
+                                for _albl, _asecs in aux_grp.items():
+                                    if is_working_aux(_albl) and _asecs > 0:
+                                        aux_detail_records.append({
+                                            "Supervisor": sched_supervisor,
+                                            "AUX Code":   _albl,
+                                            "_secs":      _asecs,
+                                        })
 
                                 if aux_col:
                                     _aux_blank = (
@@ -1275,8 +1283,27 @@ if "sched_bytes" in st.session_state:
                         _piv3s_rows.append(_rs3)
                     _piv3_sup = pd.DataFrame(_piv3s_rows) if _piv3s_rows else pd.DataFrame()
                     st.dataframe(_piv3_sup, use_container_width=True, hide_index=True)
+
+                    # ── Supervisor AUX Breakdown ────────────────────────────────
+                    _sup_aux_pivot = pd.DataFrame()
+                    if aux_detail_records:
+                        _adt = pd.DataFrame(aux_detail_records)
+                        _adt_grp = (
+                            _adt.groupby(["Supervisor", "AUX Code"])["_secs"]
+                            .sum()
+                            .unstack(fill_value=0)
+                            .reset_index()
+                        )
+                        _aux_cols_list = [c for c in _adt_grp.columns if c != "Supervisor"]
+                        _adt_grp["Total In Call Duration"] = _adt_grp[_aux_cols_list].sum(axis=1)
+                        _sup_aux_pivot = _adt_grp.copy()
+                        for _ac in _aux_cols_list + ["Total In Call Duration"]:
+                            _sup_aux_pivot[_ac] = _adt_grp[_ac].apply(fmt_duration)
+                        st.markdown("##### 📊 Supervisor AUX Breakdown (In Call Duration)")
+                        st.dataframe(_sup_aux_pivot, use_container_width=True, hide_index=True)
                 else:
                     _piv3_sup = pd.DataFrame()
+                    _sup_aux_pivot = pd.DataFrame()
 
                 # ── Detailed table ──────────────────────────────────────────────────
                 st.markdown("##### Detailed Compliance Records")
@@ -1362,6 +1389,10 @@ if "sched_bytes" in st.session_state:
                     if not _piv3_sup.empty:
                         _piv3_sup.to_excel(writer, sheet_name="Sup Hrs vs Committed", index=False)
                         _style_ws(writer.sheets["Sup Hrs vs Committed"], pct_col="Compliance %")
+
+                    if not _sup_aux_pivot.empty:
+                        _sup_aux_pivot.to_excel(writer, sheet_name="Sup AUX Breakdown", index=False)
+                        _style_ws(writer.sheets["Sup AUX Breakdown"], pct_col=None)
 
                     if out_records:
                         pd.DataFrame(out_records).to_excel(
