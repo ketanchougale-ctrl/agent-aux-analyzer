@@ -65,6 +65,25 @@ def fmt_duration(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def _merge_intervals(intervals: list) -> list:
+    """Merge overlapping (start, end) datetime pairs. Returns sorted, merged list."""
+    if not intervals:
+        return []
+    ivs = sorted(intervals, key=lambda x: x[0])
+    merged = [list(ivs[0])]
+    for s, e in ivs[1:]:
+        if s < merged[-1][1]:               # overlaps → extend
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged]
+
+
+def _union_secs(intervals: list) -> float:
+    """Total seconds covered by the union of (start, end) datetime pairs."""
+    return sum((e - s).total_seconds() for s, e in _merge_intervals(intervals))
+
+
 def _parse_dur_secs(val) -> float | None:
     """Parse a Duration cell value to seconds.
     Handles datetime.time objects, timedelta, and HH:MM:SS / H:MM:SS strings."""
@@ -479,7 +498,10 @@ if result_df.empty:
     st.warning("No AUX records overlap the selected time slot for this agent on this date.")
 else:
     slot_total_sec = (q_end - q_start).total_seconds()
-    total_overlap_sec = result_df["_overlap_sec"].sum()
+    # Union of all record intervals (not simple sum) to avoid double-counting overlaps
+    total_overlap_sec = _union_secs(
+        list(zip(result_df["_eff_start"], result_df["_eff_end"]))
+    )
 
     # ── Metrics ──────────────────────────────────────────────────────────────
     m1, m2, m3, m4 = st.columns(4)
@@ -952,10 +974,37 @@ if "sched_bytes" in st.session_state:
                                 overlap["_ee"] = overlap[logout_col].clip(lower=q_s, upper=q_e)
                                 overlap["_sc"] = (overlap["_ee"] - overlap["_es"]).dt.total_seconds()
 
-                                total_secs   = overlap["_sc"].sum()
-                                in_call_secs = overlap[
-                                    overlap["_aux_label"].apply(is_working_aux)
-                                ]["_sc"].sum()
+                                # ── Interval-union totals (no double-counting) ──────────
+                                _all_ivs = list(zip(overlap["_es"], overlap["_ee"]))
+                                total_secs = _union_secs(_all_ivs)
+
+                                # Working AUX intervals
+                                _wk_mask = overlap["_aux_label"].apply(is_working_aux)
+                                _wk_rows = overlap[_wk_mask]
+                                _wk_ivs  = list(zip(_wk_rows["_es"], _wk_rows["_ee"]))
+
+                                # Special Project: include only when isolated
+                                # (no overlap with any other record in the slot)
+                                _sp_mask = (
+                                    overlap["_aux_label"].str.lower().str.strip()
+                                    == "special project"
+                                )
+                                if _sp_mask.any():
+                                    _oth_ivs = list(zip(
+                                        overlap.loc[~_sp_mask, "_es"],
+                                        overlap.loc[~_sp_mask, "_ee"],
+                                    ))
+                                    for _sp_s, _sp_e in zip(
+                                        overlap.loc[_sp_mask, "_es"],
+                                        overlap.loc[_sp_mask, "_ee"],
+                                    ):
+                                        if not any(
+                                            _sp_s < _oe and _sp_e > _os
+                                            for _os, _oe in _oth_ivs
+                                        ):
+                                            _wk_ivs.append((_sp_s, _sp_e))
+
+                                in_call_secs = _union_secs(_wk_ivs)
 
                                 aux_grp = (
                                     overlap.groupby("_aux_label")["_sc"]
