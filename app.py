@@ -1080,27 +1080,6 @@ if "sched_bytes" in st.session_state:
                                 _wk_rows = overlap[_wk_mask]
                                 _wk_ivs  = list(zip(_wk_rows["_es"], _wk_rows["_ee"]))
 
-                                # Special Project: add only the residual not covered
-                                # by any other record (working or not).
-                                _sp_mask = (
-                                    overlap["_aux_label"].str.lower().str.strip()
-                                    == "special project"
-                                )
-                                if _sp_mask.any():
-                                    _sp_raw  = list(zip(
-                                        overlap.loc[_sp_mask, "_es"],
-                                        overlap.loc[_sp_mask, "_ee"],
-                                    ))
-                                    _non_sp  = list(zip(
-                                        overlap.loc[~_sp_mask, "_es"],
-                                        overlap.loc[~_sp_mask, "_ee"],
-                                    ))
-                                    _sp_residual = _subtract_intervals(
-                                        _merge_intervals(_sp_raw),
-                                        _merge_intervals(_non_sp),
-                                    )
-                                    _wk_ivs.extend(_sp_residual)
-
                                 in_call_secs = _union_secs(_wk_ivs)
 
                                 _cpl_triples = list(zip(
