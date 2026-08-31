@@ -84,6 +84,91 @@ def _union_secs(intervals: list) -> float:
     return sum((e - s).total_seconds() for s, e in _merge_intervals(intervals))
 
 
+def _subtract_intervals(ivs_a: list, ivs_b: list) -> list:
+    """Subtract ivs_b from ivs_a. Returns remaining (start, end) pairs."""
+    if not ivs_b or not ivs_a:
+        return list(ivs_a)
+    remaining = list(ivs_a)
+    for b_s, b_e in _merge_intervals(ivs_b):
+        new = []
+        for a_s, a_e in remaining:
+            if b_e <= a_s or b_s >= a_e:
+                new.append((a_s, a_e))
+            else:
+                if a_s < b_s:
+                    new.append((a_s, b_s))
+                if b_e < a_e:
+                    new.append((b_e, a_e))
+        remaining = new
+    return remaining
+
+
+_SESSION_AUX = frozenset({"in call - working", "in call- working"})
+_SP_AUX      = "special project"
+
+
+def _allocate_aux_secs(triples: list) -> dict:
+    """Allocate slot time to AUX labels without double-counting overlapping intervals.
+
+    Priority: specific AUX codes  >  In Call - Working (session)  >  Special Project
+    Special Project is included only when fully isolated (no overlap with any other record).
+
+    Args:
+        triples: list of (label_str, start_datetime, end_datetime)
+    Returns:
+        {label: seconds} — only labels with seconds > 0 are included.
+    """
+    specific, sessions, special = [], [], []
+    for lbl, s, e in triples:
+        low = str(lbl).lower().strip()
+        if low == _SP_AUX:
+            special.append((lbl, s, e))
+        elif low in _SESSION_AUX:
+            sessions.append((lbl, s, e))
+        else:
+            specific.append((lbl, s, e))
+
+    result  = {}
+    claimed = []            # merged list of already-claimed (start, end) intervals
+
+    def _claim_group(group):
+        by_label = {}
+        for lbl, s, e in group:
+            by_label.setdefault(lbl, []).append((s, e))
+        for label, ivs in by_label.items():
+            unique = _subtract_intervals(_merge_intervals(ivs), claimed)
+            secs   = sum((e - s).total_seconds() for s, e in unique)
+            if secs > 0:
+                result[label] = result.get(label, 0) + secs
+            if unique:
+                claimed.extend(unique)
+                claimed[:] = _merge_intervals(claimed)
+
+    _claim_group(specific)
+    _claim_group(sessions)
+
+    if special:
+        all_other_ivs = [(s, e) for _, s, e in specific + sessions]
+        sp_by_label = {}
+        for lbl, s, e in special:
+            sp_by_label.setdefault(lbl, []).append((s, e))
+        for label, sp_ivs in sp_by_label.items():
+            isolated = [
+                (s, e) for s, e in sp_ivs
+                if not any(s < oe and e > os for os, oe in all_other_ivs)
+            ]
+            if isolated:
+                unique = _subtract_intervals(_merge_intervals(isolated), claimed)
+                secs   = sum((e - s).total_seconds() for s, e in unique)
+                if secs > 0:
+                    result[label] = result.get(label, 0) + secs
+                    if unique:
+                        claimed.extend(unique)
+                        claimed[:] = _merge_intervals(claimed)
+
+    return result
+
+
 def _parse_dur_secs(val) -> float | None:
     """Parse a Duration cell value to seconds.
     Handles datetime.time objects, timedelta, and HH:MM:SS / H:MM:SS strings."""
@@ -546,13 +631,17 @@ else:
         st.write("")
         st.markdown("#### 📊 AUX Breakdown in Slot")
 
+        _triples = list(zip(
+            result_df["_aux_label"],
+            result_df["_eff_start"],
+            result_df["_eff_end"],
+        ))
+        _alloc = _allocate_aux_secs(_triples)
         summary = (
-            result_df.groupby("_aux_label")["_overlap_sec"]
-            .sum()
-            .reset_index()
-            .rename(columns={"_aux_label": "AUX Code", "_overlap_sec": "Seconds"})
-            .sort_values("Seconds", ascending=False)
+            pd.DataFrame([{"AUX Code": k, "Seconds": v} for k, v in _alloc.items()])
+            if _alloc else pd.DataFrame(columns=["AUX Code", "Seconds"])
         )
+        summary = summary.sort_values("Seconds", ascending=False).reset_index(drop=True)
         summary["Duration (HH:MM:SS)"] = summary["Seconds"].apply(fmt_duration)
         summary["Minutes"] = (summary["Seconds"] / 60).round(2)
         summary["% of Slot"] = (summary["Seconds"] / slot_total_sec * 100).round(1)
@@ -1018,12 +1107,17 @@ if "sched_bytes" in st.session_state:
 
                                 in_call_secs = _union_secs(_wk_ivs)
 
-                                aux_grp = (
-                                    overlap.groupby("_aux_label")["_sc"]
-                                    .sum().sort_values(ascending=False)
-                                )
+                                _cpl_triples = list(zip(
+                                    overlap["_aux_label"],
+                                    overlap["_es"],
+                                    overlap["_ee"],
+                                ))
+                                aux_grp = pd.Series(
+                                    _allocate_aux_secs(_cpl_triples)
+                                ).sort_values(ascending=False)
                                 aux_str = "; ".join(
-                                    f"{k}: {fmt_duration(v)}" for k, v in aux_grp.items()
+                                    f"{k}: {fmt_duration(v)}"
+                                    for k, v in aux_grp.items() if v > 0
                                 )
                                 for _albl, _asecs in aux_grp.items():
                                     if is_working_aux(_albl) and _asecs > 0:
