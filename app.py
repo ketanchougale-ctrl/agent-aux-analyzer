@@ -148,23 +148,19 @@ def _allocate_aux_secs(triples: list) -> dict:
     _claim_group(sessions)
 
     if special:
-        all_other_ivs = [(s, e) for _, s, e in specific + sessions]
         sp_by_label = {}
         for lbl, s, e in special:
             sp_by_label.setdefault(lbl, []).append((s, e))
         for label, sp_ivs in sp_by_label.items():
-            isolated = [
-                (s, e) for s, e in sp_ivs
-                if not any(s < oe and e > os for os, oe in all_other_ivs)
-            ]
-            if isolated:
-                unique = _subtract_intervals(_merge_intervals(isolated), claimed)
-                secs   = sum((e - s).total_seconds() for s, e in unique)
-                if secs > 0:
-                    result[label] = result.get(label, 0) + secs
-                    if unique:
-                        claimed.extend(unique)
-                        claimed[:] = _merge_intervals(claimed)
+            # Subtract all already-claimed time from Special Project;
+            # only the uncovered residual is attributed to Special Project.
+            unique = _subtract_intervals(_merge_intervals(sp_ivs), claimed)
+            secs   = sum((e - s).total_seconds() for s, e in unique)
+            if secs > 0:
+                result[label] = result.get(label, 0) + secs
+                if unique:
+                    claimed.extend(unique)
+                    claimed[:] = _merge_intervals(claimed)
 
     return result
 
@@ -1084,26 +1080,26 @@ if "sched_bytes" in st.session_state:
                                 _wk_rows = overlap[_wk_mask]
                                 _wk_ivs  = list(zip(_wk_rows["_es"], _wk_rows["_ee"]))
 
-                                # Special Project: include only when isolated
-                                # (no overlap with any other record in the slot)
+                                # Special Project: add only the residual not covered
+                                # by any other record (working or not).
                                 _sp_mask = (
                                     overlap["_aux_label"].str.lower().str.strip()
                                     == "special project"
                                 )
                                 if _sp_mask.any():
-                                    _oth_ivs = list(zip(
+                                    _sp_raw  = list(zip(
+                                        overlap.loc[_sp_mask, "_es"],
+                                        overlap.loc[_sp_mask, "_ee"],
+                                    ))
+                                    _non_sp  = list(zip(
                                         overlap.loc[~_sp_mask, "_es"],
                                         overlap.loc[~_sp_mask, "_ee"],
                                     ))
-                                    for _sp_s, _sp_e in zip(
-                                        overlap.loc[_sp_mask, "_es"],
-                                        overlap.loc[_sp_mask, "_ee"],
-                                    ):
-                                        if not any(
-                                            _sp_s < _oe and _sp_e > _os
-                                            for _os, _oe in _oth_ivs
-                                        ):
-                                            _wk_ivs.append((_sp_s, _sp_e))
+                                    _sp_residual = _subtract_intervals(
+                                        _merge_intervals(_sp_raw),
+                                        _merge_intervals(_non_sp),
+                                    )
+                                    _wk_ivs.extend(_sp_residual)
 
                                 in_call_secs = _union_secs(_wk_ivs)
 
