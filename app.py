@@ -970,8 +970,20 @@ if "sched_bytes" in st.session_state:
                                     "Outbound Handled":     0,
                                 })
                             else:
+                                # Precise logout = login + Duration for sub-minute accuracy
+                                if dur_default and dur_default in overlap.columns:
+                                    _d_s = overlap[dur_default].apply(_parse_dur_secs)
+                                    _hd  = _d_s.notna() & (_d_s > 0)
+                                    _prec_end = overlap[logout_col].copy()
+                                    _prec_end[_hd] = (
+                                        overlap.loc[_hd, login_col]
+                                        + _d_s[_hd].apply(lambda s: timedelta(seconds=s))
+                                    )
+                                else:
+                                    _prec_end = overlap[logout_col]
+
                                 overlap["_es"] = overlap[login_col].clip(lower=q_s, upper=q_e)
-                                overlap["_ee"] = overlap[logout_col].clip(lower=q_s, upper=q_e)
+                                overlap["_ee"] = _prec_end.clip(lower=q_s, upper=q_e)
                                 overlap["_sc"] = (overlap["_ee"] - overlap["_es"]).dt.total_seconds()
 
                                 # ── Interval-union totals (no double-counting) ──────────
