@@ -65,6 +65,26 @@ def fmt_duration(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def _parse_dur_secs(val) -> float | None:
+    """Parse a Duration cell value to seconds.
+    Handles datetime.time objects, timedelta, and HH:MM:SS / H:MM:SS strings."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, timedelta):
+        return val.total_seconds()
+    if hasattr(val, "hour"):          # datetime.time
+        return val.hour * 3600 + val.minute * 60 + val.second
+    try:
+        parts = str(val).strip().split(":")
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+    except Exception:
+        pass
+    return None
+
+
 def find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     """Case-insensitive column lookup from a list of candidate names."""
     lookup = {c.lower().strip().replace(" ", ""): c for c in df.columns}
@@ -422,9 +442,21 @@ overlap_mask = (day_df[login_col] < q_end) & (day_df[logout_col] > q_start)
 result_df = day_df[overlap_mask].copy()
 
 if not result_df.empty:
+    # Precise logout = login + Duration when Duration column has sub-minute accuracy
+    if dur_default and dur_default in result_df.columns:
+        _dur_s = result_df[dur_default].apply(_parse_dur_secs)
+        _has_dur = _dur_s.notna() & (_dur_s > 0)
+        _precise_end = result_df[logout_col].copy()
+        _precise_end[_has_dur] = (
+            result_df.loc[_has_dur, login_col]
+            + _dur_s[_has_dur].apply(lambda s: timedelta(seconds=s))
+        )
+    else:
+        _precise_end = result_df[logout_col]
+
     # Effective (clipped) times within the queried slot
     result_df["_eff_start"] = result_df[login_col].clip(lower=q_start, upper=q_end)
-    result_df["_eff_end"]   = result_df[logout_col].clip(lower=q_start, upper=q_end)
+    result_df["_eff_end"]   = _precise_end.clip(lower=q_start, upper=q_end)
     result_df["_overlap_sec"] = (
         result_df["_eff_end"] - result_df["_eff_start"]
     ).dt.total_seconds()
