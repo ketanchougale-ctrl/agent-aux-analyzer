@@ -524,8 +524,8 @@ with qc3:
 with qc4:
     slot_end = st.time_input("⏰ To (IST)", value=time(14, 0))
 
-if slot_start >= slot_end:
-    st.error("'From' time must be earlier than 'To' time.")
+if slot_start == slot_end:
+    st.error("'From' and 'To' times cannot be the same.")
     st.stop()
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -533,6 +533,8 @@ if slot_start >= slot_end:
 # ──────────────────────────────────────────────────────────────────────────────
 q_start = datetime.combine(sel_date, slot_start)
 q_end   = datetime.combine(sel_date, slot_end)
+if q_end <= q_start:            # midnight-crossing slot (e.g. 11 PM → 12 AM)
+    q_end += timedelta(days=1)
 
 # All rows for that agent on that date
 day_df = agent_df[agent_df[login_col].dt.date == sel_date].copy()
@@ -1004,6 +1006,8 @@ if "sched_bytes" in st.session_state:
                             s_time, e_time = parsed
                             q_s = datetime.combine(check_date, s_time)
                             q_e = datetime.combine(check_date, e_time)
+                            if q_e <= q_s:    # midnight-crossing slot
+                                q_e += timedelta(days=1)
 
                             day_rows = _login_lookup.get((sched_agent, check_date), _empty_login_df)
                             overlap  = day_rows[
@@ -1334,9 +1338,11 @@ if "sched_bytes" in st.session_state:
                         if _p is None:
                             return 0
                         _dummy = date(2000, 1, 1)
-                        return max(0, (
-                            datetime.combine(_dummy, _p[1]) - datetime.combine(_dummy, _p[0])
-                        ).total_seconds())
+                        _s_dt  = datetime.combine(_dummy, _p[0])
+                        _e_dt  = datetime.combine(_dummy, _p[1])
+                        if _e_dt <= _s_dt:      # midnight-crossing slot (e.g. 11 PM → 12 AM)
+                            _e_dt += timedelta(days=1)
+                        return (_e_dt - _s_dt).total_seconds()
                     except Exception:
                         return 0
 
