@@ -1837,7 +1837,6 @@ if "ot_bytes" in st.session_state:
                     _qe = datetime.combine(_ot_date, _et)
                     if _qe <= _qs:
                         _qe += timedelta(days=1)
-                    _next_date = _ot_date + timedelta(days=1)
 
                     # Find agent rows in login data by email
                     if not _eml_key:
@@ -1862,12 +1861,10 @@ if "ot_bytes" in st.session_state:
                                            "AUX Breakdown":        ""})
                         continue
 
-                    # Overlap within OT window (include next date for midnight-crossing)
-                    _day_rows2 = _ag_rows[
-                        _ag_rows[login_col].dt.date.isin([_ot_date, _next_date])
-                    ]
-                    _ov2 = _day_rows2[
-                        (_day_rows2[login_col] < _qe) & (_day_rows2[logout_col] > _qs)
+                    # Use the OT window bounds directly — no date pre-filter so
+                    # after-midnight IST records (login_date = next day) are never missed.
+                    _ov2 = _ag_rows[
+                        (_ag_rows[login_col] < _qe) & (_ag_rows[logout_col] > _qs)
                     ].copy()
 
                     _b2 = {**_ot_base(), "OT Date": _ot_date_str, "OT Shift": _slot["_raw_shift"]}
