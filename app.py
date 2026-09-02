@@ -1906,8 +1906,11 @@ if "ot_bytes" in st.session_state:
 
                     _all_iv2   = list(zip(_ov2["_es"], _ov2["_ee"]))
                     _tot2      = _union_secs(_all_iv2)
-                    _wk2       = _ov2["_aux_label"].apply(is_working_aux)
-                    _wk_iv2    = list(zip(_ov2.loc[_wk2, "_es"], _ov2.loc[_wk2, "_ee"]))
+                    # In Call Duration = actual call time only (skill-name records = "In Call - Working")
+                    _call_mask = _ov2["_aux_label"].str.lower().str.strip().isin(
+                        {"in call - working", "in call- working"}
+                    )
+                    _wk_iv2    = list(zip(_ov2.loc[_call_mask, "_es"], _ov2.loc[_call_mask, "_ee"]))
                     _inc2      = _union_secs(_wk_iv2)
 
                     _tr2       = list(zip(_ov2["_aux_label"], _ov2["_es"], _ov2["_ee"]))
