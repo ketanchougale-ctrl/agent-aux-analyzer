@@ -1903,15 +1903,25 @@ if "ot_bytes" in st.session_state:
 
                     _all_iv2   = list(zip(_ov2["_es"], _ov2["_ee"]))
                     _tot2      = _union_secs(_all_iv2)
-                    # In Call Duration = actual call time only (skill-name records = "In Call - Working")
+
+                    # Raw sum of each record's clipped duration — call-centre records
+                    # represent parallel tracking (skill sessions + state sub-records),
+                    # so Duration per row already reflects distinct state time.
+                    _ov2["_clip_secs"] = (
+                        _ov2["_ee"] - _ov2["_es"]
+                    ).dt.total_seconds()
+
+                    # In Call Duration = raw sum of "In Call - Working" clipped durations
                     _call_mask = _ov2["_aux_label"].str.lower().str.strip().isin(
                         {"in call - working", "in call- working"}
                     )
-                    _wk_iv2    = list(zip(_ov2.loc[_call_mask, "_es"], _ov2.loc[_call_mask, "_ee"]))
-                    _inc2      = _union_secs(_wk_iv2)
+                    _inc2      = _ov2.loc[_call_mask, "_clip_secs"].sum()
 
-                    _tr2       = list(zip(_ov2["_aux_label"], _ov2["_es"], _ov2["_ee"]))
-                    _ag2       = pd.Series(_allocate_aux_secs(_tr2)).sort_values(ascending=False)
+                    _ag2       = (
+                        _ov2.groupby("_aux_label")["_clip_secs"]
+                        .sum()
+                        .sort_values(ascending=False)
+                    )
                     _ax2       = "; ".join(f"{k}: {fmt_duration(v)}"
                                            for k, v in _ag2.items() if v > 0)
 
