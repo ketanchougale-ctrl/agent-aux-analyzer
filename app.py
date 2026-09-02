@@ -1577,3 +1577,327 @@ if "sched_bytes" in st.session_state:
                     file_name=f"ScheduleCompliance_{date_from}_{date_to}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OT Tracker
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="section-header">⏰ OT Tracker</div>', unsafe_allow_html=True)
+st.write("")
+st.caption(
+    "Upload the OT schedule sheet to verify whether agents logged in and handled calls "
+    "during their Overtime window. Reuses the login data loaded in the sidebar. "
+    "**Eligibility = ✅ agent had In-Call activity during the OT shift.**"
+)
+
+
+def parse_ot_shift(shift_str: str):
+    """Parse 24-hour OT shift strings like '19:00-04:00'. Falls back to parse_time_slot."""
+    s  = str(shift_str).strip()
+    m24 = re.match(r'^(\d{1,2}):(\d{2})\s*[-\u2013]\s*(\d{1,2}):(\d{2})$', s)
+    if m24:
+        try:
+            return time(int(m24.group(1)), int(m24.group(2))), \
+                   time(int(m24.group(3)), int(m24.group(4)))
+        except ValueError:
+            pass
+    return parse_time_slot(s)
+
+
+ot_uploaded = st.file_uploader(
+    "📂 Upload OT Schedule (Excel or CSV)",
+    type=["xlsx", "xls", "csv"],
+    key="ot_uploader",
+)
+if ot_uploaded is not None:
+    _ob = ot_uploaded.read()
+    _save_to_disk("ot", _ob, ot_uploaded.name)
+    st.session_state["ot_bytes"] = _ob
+    st.session_state["ot_name"]  = ot_uploaded.name
+
+if "ot_bytes" not in st.session_state:
+    _ob2, _on2 = _load_from_disk("ot")
+    if _ob2 is not None:
+        st.session_state["ot_bytes"] = _ob2
+        st.session_state["ot_name"]  = _on2
+
+if "ot_bytes" in st.session_state:
+    _otc1, _otc2 = st.columns([1, 3])
+    if _otc1.button("🗑️ Clear OT file", key="clear_ot"):
+        _clear_from_disk("ot")
+        st.session_state.pop("ot_bytes", None)
+        st.session_state.pop("ot_name",  None)
+        st.rerun()
+    _otc2.caption(f"📄 Using: **{st.session_state['ot_name']}**")
+
+    ot_raw = load_file(st.session_state["ot_bytes"], st.session_state["ot_name"])
+    st.success(f"OT Schedule loaded — {len(ot_raw)} rows, {len(ot_raw.columns)} columns")
+
+    with st.expander("Preview OT Schedule", expanded=False):
+        st.dataframe(ot_raw, use_container_width=True)
+
+    # ── Column mapping ─────────────────────────────────────────────────────────
+    st.markdown("##### Configure OT Schedule Columns")
+    ot_cols  = list(ot_raw.columns)
+    _ot_idx  = lambda c: (ot_cols.index(c) if c and c in ot_cols else 0)
+
+    _otn_def  = find_col(ot_raw, ["employee name", "agent name", "name"])
+    _ots_def  = find_col(ot_raw, ["supervisor"])
+    _ote_def  = find_col(ot_raw, ["email id", "email"])
+    _otp_def  = find_col(ot_raw, ["process"])
+
+    _ocm1, _ocm2, _ocm3, _ocm4 = st.columns(4)
+    with _ocm1:
+        ot_name_col = st.selectbox("Employee Name", ot_cols, index=_ot_idx(_otn_def))
+    with _ocm2:
+        ot_sup_col  = st.selectbox("Supervisor (optional)", ["— skip —"] + ot_cols,
+                                   index=(_ot_idx(_ots_def) + 1) if _ots_def else 0)
+        if ot_sup_col == "— skip —": ot_sup_col = None
+    with _ocm3:
+        ot_email_col = st.selectbox("Email ID (optional)", ["— skip —"] + ot_cols,
+                                    index=(_ot_idx(_ote_def) + 1) if _ote_def else 0)
+        if ot_email_col == "— skip —": ot_email_col = None
+    with _ocm4:
+        ot_proc_col = st.selectbox("Process (optional)", ["— skip —"] + ot_cols,
+                                   index=(_ot_idx(_otp_def) + 1) if _otp_def else 0)
+        if ot_proc_col == "— skip —": ot_proc_col = None
+
+    st.markdown("###### OT Slot Column Sets (up to 3)")
+    _ot_triplets = []
+    for _n in range(1, 4):
+        _wo_def    = find_col(ot_raw, [f"working week off {_n}", f"week off {_n}"])
+        _date_def  = find_col(ot_raw, [f"ot working date {_n}", f"ot date {_n}"])
+        _shift_def = find_col(ot_raw, [f"ot shift {_n}", f"shift {_n}"])
+        _tc1, _tc2, _tc3 = st.columns(3)
+        with _tc1:
+            _wo = st.selectbox(f"Working Week Off {_n}", ["— skip —"] + ot_cols,
+                               index=(_ot_idx(_wo_def) + 1) if _wo_def else 0,
+                               key=f"ot_wo_{_n}")
+            if _wo == "— skip —": _wo = None
+        with _tc2:
+            _dt = st.selectbox(f"OT Working Date {_n}", ["— skip —"] + ot_cols,
+                               index=(_ot_idx(_date_def) + 1) if _date_def else 0,
+                               key=f"ot_date_{_n}")
+            if _dt == "— skip —": _dt = None
+        with _tc3:
+            _sh = st.selectbox(f"OT Shift {_n}", ["— skip —"] + ot_cols,
+                               index=(_ot_idx(_shift_def) + 1) if _shift_def else 0,
+                               key=f"ot_shift_{_n}")
+            if _sh == "— skip —": _sh = None
+        if _dt and _sh:
+            _ot_triplets.append((_wo, _dt, _sh))
+
+    if not _ot_triplets:
+        st.warning("⚠️ Configure at least one OT Date + Shift column pair to continue.")
+    else:
+        if st.button("▶️ Run OT Compliance Report", type="primary", key="run_ot"):
+
+            # Build name lookup: lower(agent_name) → sub-DataFrame
+            _ot_name_lkp: dict = {}
+            for _ak, _ag_df in df.groupby(df[agent_col].str.lower().str.strip()):
+                _ot_name_lkp[_ak] = _ag_df
+
+            # Melt wide OT schedule → long format
+            ot_long: list = []
+            _sno = 0
+            for _, ot_row in ot_raw.iterrows():
+                emp = str(ot_row[ot_name_col]).strip()
+                if not emp or emp.lower() == "nan":
+                    continue
+                _sup  = str(ot_row[ot_sup_col]).strip()   if ot_sup_col   and pd.notna(ot_row.get(ot_sup_col))   else ""
+                _eml  = str(ot_row[ot_email_col]).strip() if ot_email_col and pd.notna(ot_row.get(ot_email_col)) else ""
+                _prc  = str(ot_row[ot_proc_col]).strip()  if ot_proc_col  and pd.notna(ot_row.get(ot_proc_col))  else ""
+                for _wo_col, _date_col, _shift_col in _ot_triplets:
+                    _rd = ot_row.get(_date_col)
+                    _rs = ot_row.get(_shift_col)
+                    _rw = str(ot_row.get(_wo_col, "")).strip() if _wo_col else ""
+                    if pd.isna(_rd) or str(_rd).strip().lower() in ("", "nan"):
+                        continue
+                    if pd.isna(_rs) or str(_rs).strip().lower() in ("", "nan"):
+                        continue
+                    _sno += 1
+                    ot_long.append({
+                        "S.No":          _sno,
+                        "Employee Name": emp,
+                        "Email ID":      _eml,
+                        "Supervisor":    _sup,
+                        "Process":       _prc,
+                        "Week Off Day":  _rw,
+                        "_raw_date":     _rd,
+                        "_raw_shift":    str(_rs).strip(),
+                    })
+
+            if not ot_long:
+                st.warning("No OT slots found — check column mapping.")
+            else:
+                ot_records   = []
+                _ot_unmatched: set = set()
+                _ot_prog = st.progress(0.0, text="Processing OT slots…")
+
+                for _i, _slot in enumerate(ot_long):
+                    _ot_prog.progress(min((_i + 1) / len(ot_long), 1.0))
+                    _emp     = _slot["Employee Name"]
+                    _emp_low = _emp.lower().strip()
+
+                    def _ot_base():
+                        return {k: v for k, v in _slot.items()
+                                if k not in ("_raw_date", "_raw_shift")}
+
+                    # Parse OT date
+                    try:
+                        _rd2 = _slot["_raw_date"]
+                        _ot_date = (pd.Timestamp(_rd2).date()
+                                    if isinstance(_rd2, (datetime, pd.Timestamp))
+                                    else pd.to_datetime(str(_rd2), dayfirst=True).date())
+                    except Exception:
+                        ot_records.append({**_ot_base(),
+                                           "OT Date":              str(_slot["_raw_date"]),
+                                           "OT Shift":             _slot["_raw_shift"],
+                                           "Status":               "⚠️ Date Parse Error",
+                                           "In Call Duration":     "-",
+                                           "Total Active in Slot": "-",
+                                           "AUX Breakdown":        ""})
+                        continue
+
+                    _ot_date_str = _ot_date.strftime("%d-%b-%Y")
+
+                    # Parse shift
+                    _parsed_shift = parse_ot_shift(_slot["_raw_shift"])
+                    if _parsed_shift is None:
+                        ot_records.append({**_ot_base(),
+                                           "OT Date":              _ot_date_str,
+                                           "OT Shift":             _slot["_raw_shift"],
+                                           "Status":               "⚠️ Shift Parse Error",
+                                           "In Call Duration":     "-",
+                                           "Total Active in Slot": "-",
+                                           "AUX Breakdown":        ""})
+                        continue
+
+                    _st, _et = _parsed_shift
+                    _qs = datetime.combine(_ot_date, _st)
+                    _qe = datetime.combine(_ot_date, _et)
+                    if _qe <= _qs:
+                        _qe += timedelta(days=1)
+                    _next_date = _ot_date + timedelta(days=1)
+
+                    # Find agent rows in login data
+                    _ag_rows = _ot_name_lkp.get(_emp_low)
+                    if _ag_rows is None:
+                        for _k2 in _ot_name_lkp:
+                            if _emp_low in _k2 or _k2 in _emp_low:
+                                _ag_rows = _ot_name_lkp[_k2]
+                                break
+                    if _ag_rows is None:
+                        _ot_unmatched.add(_emp)
+                        ot_records.append({**_ot_base(),
+                                           "OT Date":              _ot_date_str,
+                                           "OT Shift":             _slot["_raw_shift"],
+                                           "Status":               "❌ Agent Not Found in Login Data",
+                                           "In Call Duration":     "-",
+                                           "Total Active in Slot": "-",
+                                           "AUX Breakdown":        ""})
+                        continue
+
+                    # Overlap within OT window (include next date for midnight-crossing)
+                    _day_rows2 = _ag_rows[
+                        _ag_rows[login_col].dt.date.isin([_ot_date, _next_date])
+                    ]
+                    _ov2 = _day_rows2[
+                        (_day_rows2[login_col] < _qe) & (_day_rows2[logout_col] > _qs)
+                    ].copy()
+
+                    _b2 = {**_ot_base(), "OT Date": _ot_date_str, "OT Shift": _slot["_raw_shift"]}
+
+                    if _ov2.empty:
+                        ot_records.append({**_b2,
+                                           "Status":               "❌ Not Logged In",
+                                           "In Call Duration":     "00:00:00",
+                                           "Total Active in Slot": "00:00:00",
+                                           "AUX Breakdown":        "No activity"})
+                        continue
+
+                    # Precise logout via Duration column
+                    if dur_default and dur_default in _ov2.columns:
+                        _ds2 = _ov2[dur_default].apply(_parse_dur_secs)
+                        _hd2 = _ds2.notna() & (_ds2 > 0)
+                        _pe2 = _ov2[logout_col].copy()
+                        _pe2[_hd2] = (
+                            _ov2.loc[_hd2, login_col]
+                            + _ds2[_hd2].apply(lambda s: timedelta(seconds=s))
+                        )
+                    else:
+                        _pe2 = _ov2[logout_col]
+
+                    _ov2["_es"] = _ov2[login_col].clip(lower=_qs, upper=_qe)
+                    _ov2["_ee"] = _pe2.clip(lower=_qs, upper=_qe)
+                    _ov2 = _ov2[_ov2["_ee"] > _ov2["_es"]].copy()
+
+                    if _ov2.empty:
+                        ot_records.append({**_b2,
+                                           "Status":               "❌ Not Logged In",
+                                           "In Call Duration":     "00:00:00",
+                                           "Total Active in Slot": "00:00:00",
+                                           "AUX Breakdown":        "No activity"})
+                        continue
+
+                    _all_iv2   = list(zip(_ov2["_es"], _ov2["_ee"]))
+                    _tot2      = _union_secs(_all_iv2)
+                    _wk2       = _ov2["_aux_label"].apply(is_working_aux)
+                    _wk_iv2    = list(zip(_ov2.loc[_wk2, "_es"], _ov2.loc[_wk2, "_ee"]))
+                    _inc2      = _union_secs(_wk_iv2)
+
+                    _tr2       = list(zip(_ov2["_aux_label"], _ov2["_es"], _ov2["_ee"]))
+                    _ag2       = pd.Series(_allocate_aux_secs(_tr2)).sort_values(ascending=False)
+                    _ax2       = "; ".join(f"{k}: {fmt_duration(v)}"
+                                           for k, v in _ag2.items() if v > 0)
+
+                    _st2 = ("✅ Eligible - On Calls"
+                            if _inc2 > 0 else "⚠️ Logged In - No Calls")
+                    ot_records.append({**_b2,
+                                       "Status":               _st2,
+                                       "In Call Duration":     fmt_duration(_inc2),
+                                       "Total Active in Slot": fmt_duration(_tot2),
+                                       "AUX Breakdown":        _ax2})
+
+                _ot_prog.empty()
+
+                if ot_records:
+                    ot_df = pd.DataFrame(ot_records)
+
+                    _ot_elig = int(ot_df["Status"].str.startswith("✅").sum())
+                    _ot_nc   = int(ot_df["Status"].str.startswith("⚠️ Logged").sum())
+                    _ot_ni   = int(ot_df["Status"].str.startswith("❌ Not L").sum())
+                    _ot_err  = int(ot_df["Status"].str.contains(
+                        "Error|Not Found", na=False).sum())
+
+                    _om1, _om2, _om3, _om4, _om5 = st.columns(5)
+                    _om1.metric("Total OT Slots",         len(ot_df))
+                    _om2.metric("✅ Eligible (On Calls)",  _ot_elig)
+                    _om3.metric("⚠️ Logged - No Calls",    _ot_nc)
+                    _om4.metric("❌ Not Logged In",         _ot_ni)
+                    _om5.metric("⚠️ Errors / Not Found",   _ot_err)
+
+                    if _ot_unmatched:
+                        st.warning(
+                            f"⚠️ {len(_ot_unmatched)} agent(s) not found in login data — "
+                            "check name spelling: "
+                            + ", ".join(sorted(_ot_unmatched))
+                        )
+
+                    st.dataframe(ot_df, use_container_width=True, hide_index=True)
+
+                    _ot_out = io.BytesIO()
+                    with pd.ExcelWriter(_ot_out, engine="openpyxl") as _ot_writer:
+                        ot_df.to_excel(_ot_writer, sheet_name="OT Compliance", index=False)
+                        _style_ws(_ot_writer.sheets["OT Compliance"], pct_col=None)
+                        ot_raw.to_excel(_ot_writer, sheet_name="Raw - OT Schedule", index=False)
+                        _style_ws(_ot_writer.sheets["Raw - OT Schedule"], pct_col=None)
+
+                    st.download_button(
+                        "📥 Download OT Compliance Report (Excel)",
+                        data=_ot_out.getvalue(),
+                        file_name=f"OT_Compliance_{date.today().strftime('%d-%b-%Y')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+else:
+    st.info("📤 Upload an OT schedule file above to get started.")
