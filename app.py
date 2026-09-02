@@ -1695,18 +1695,28 @@ if "ot_bytes" in st.session_state:
     _ote_def  = find_col(ot_raw, ["email id", "email"])
     _otp_def  = find_col(ot_raw, ["process"])
 
-    _ocm1, _ocm2, _ocm3, _ocm4 = st.columns(4)
+    _login_cols      = list(df.columns)
+    _login_email_def = find_col(df, ["agent email", "email id", "email"])
+    _li_idx = lambda c: (_login_cols.index(c) if c and c in _login_cols else 0)
+
+    st.caption("🔗 Agents are matched **by Email ID** between the OT schedule and the login data.")
+    _ocm1, _ocm2, _ocm3 = st.columns(3)
     with _ocm1:
-        ot_name_col = st.selectbox("Employee Name", ot_cols, index=_ot_idx(_otn_def))
+        ot_name_col = st.selectbox("Employee Name (OT schedule)", ot_cols,
+                                   index=_ot_idx(_otn_def))
     with _ocm2:
-        ot_sup_col  = st.selectbox("Supervisor (optional)", ["— skip —"] + ot_cols,
-                                   index=(_ot_idx(_ots_def) + 1) if _ots_def else 0)
-        if ot_sup_col == "— skip —": ot_sup_col = None
+        ot_email_col = st.selectbox("Email ID — OT schedule ★", ot_cols,
+                                    index=_ot_idx(_ote_def))
     with _ocm3:
-        ot_email_col = st.selectbox("Email ID (optional)", ["— skip —"] + ot_cols,
-                                    index=(_ot_idx(_ote_def) + 1) if _ote_def else 0)
-        if ot_email_col == "— skip —": ot_email_col = None
+        ot_login_email_col = st.selectbox("Agent Email — Login data ★", _login_cols,
+                                          index=_li_idx(_login_email_def))
+
+    _ocm4, _ocm5 = st.columns(2)
     with _ocm4:
+        ot_sup_col = st.selectbox("Supervisor (optional)", ["— skip —"] + ot_cols,
+                                  index=(_ot_idx(_ots_def) + 1) if _ots_def else 0)
+        if ot_sup_col == "— skip —": ot_sup_col = None
+    with _ocm5:
         ot_proc_col = st.selectbox("Process (optional)", ["— skip —"] + ot_cols,
                                    index=(_ot_idx(_otp_def) + 1) if _otp_def else 0)
         if ot_proc_col == "— skip —": ot_proc_col = None
@@ -1741,10 +1751,10 @@ if "ot_bytes" in st.session_state:
     else:
         if st.button("▶️ Run OT Compliance Report", type="primary", key="run_ot"):
 
-            # Build name lookup: lower(agent_name) → sub-DataFrame
-            _ot_name_lkp: dict = {}
-            for _ak, _ag_df in df.groupby(df[agent_col].str.lower().str.strip()):
-                _ot_name_lkp[_ak] = _ag_df
+            # Build email lookup: lower(agent_email) → sub-DataFrame
+            _ot_email_lkp: dict = {}
+            for _ek, _eg_df in df.groupby(df[ot_login_email_col].str.lower().str.strip()):
+                _ot_email_lkp[_ek] = _eg_df
 
             # Melt wide OT schedule → long format
             ot_long: list = []
@@ -1753,8 +1763,8 @@ if "ot_bytes" in st.session_state:
                 emp = str(ot_row[ot_name_col]).strip()
                 if not emp or emp.lower() == "nan":
                     continue
-                _sup  = str(ot_row[ot_sup_col]).strip()   if ot_sup_col   and pd.notna(ot_row.get(ot_sup_col))   else ""
-                _eml  = str(ot_row[ot_email_col]).strip() if ot_email_col and pd.notna(ot_row.get(ot_email_col)) else ""
+                _sup  = str(ot_row[ot_sup_col]).strip()  if ot_sup_col  and pd.notna(ot_row.get(ot_sup_col))  else ""
+                _eml  = str(ot_row[ot_email_col]).strip() if pd.notna(ot_row.get(ot_email_col)) else ""
                 _prc  = str(ot_row[ot_proc_col]).strip()  if ot_proc_col  and pd.notna(ot_row.get(ot_proc_col))  else ""
                 for _wo_col, _date_col, _shift_col in _ot_triplets:
                     _rd = ot_row.get(_date_col)
@@ -1786,7 +1796,7 @@ if "ot_bytes" in st.session_state:
                 for _i, _slot in enumerate(ot_long):
                     _ot_prog.progress(min((_i + 1) / len(ot_long), 1.0))
                     _emp     = _slot["Employee Name"]
-                    _emp_low = _emp.lower().strip()
+                    _eml_key = _slot["Email ID"].lower().strip()
 
                     def _ot_base():
                         return {k: v for k, v in _slot.items()
@@ -1829,15 +1839,20 @@ if "ot_bytes" in st.session_state:
                         _qe += timedelta(days=1)
                     _next_date = _ot_date + timedelta(days=1)
 
-                    # Find agent rows in login data
-                    _ag_rows = _ot_name_lkp.get(_emp_low)
+                    # Find agent rows in login data by email
+                    if not _eml_key:
+                        _ot_unmatched.add(f"{_emp} (no email)")
+                        ot_records.append({**_ot_base(),
+                                           "OT Date":              _ot_date_str,
+                                           "OT Shift":             _slot["_raw_shift"],
+                                           "Status":               "⚠️ Email Missing in OT Schedule",
+                                           "In Call Duration":     "-",
+                                           "Total Active in Slot": "-",
+                                           "AUX Breakdown":        ""})
+                        continue
+                    _ag_rows = _ot_email_lkp.get(_eml_key)
                     if _ag_rows is None:
-                        for _k2 in _ot_name_lkp:
-                            if _emp_low in _k2 or _k2 in _emp_low:
-                                _ag_rows = _ot_name_lkp[_k2]
-                                break
-                    if _ag_rows is None:
-                        _ot_unmatched.add(_emp)
+                        _ot_unmatched.add(f"{_emp} <{_slot['Email ID']}>")
                         ot_records.append({**_ot_base(),
                                            "OT Date":              _ot_date_str,
                                            "OT Shift":             _slot["_raw_shift"],
@@ -1928,8 +1943,8 @@ if "ot_bytes" in st.session_state:
 
                     if _ot_unmatched:
                         st.warning(
-                            f"⚠️ {len(_ot_unmatched)} agent(s) not found in login data — "
-                            "check name spelling: "
+                            f"⚠️ {len(_ot_unmatched)} OT entry/entries not matched in login data — "
+                            "check email addresses: "
                             + ", ".join(sorted(_ot_unmatched))
                         )
 
