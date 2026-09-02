@@ -386,6 +386,30 @@ def load_file_sheet(file_bytes: bytes, file_name: str, sheet_name: str) -> pd.Da
     return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, engine="openpyxl")
 
 
+OT_SHEET_NAME = "Enrollment Register"
+OT_SKIP_ROWS  = 3   # first 3 rows are metadata; row 4 is the real header
+
+
+@st.cache_data(show_spinner="Loading OT schedule…")
+def load_ot_schedule(file_bytes: bytes, file_name: str) -> pd.DataFrame:
+    """Load the OT schedule from the 'Enrollment Register' sheet, skipping the first 3 rows."""
+    if file_name.lower().endswith(".csv"):
+        return pd.read_csv(io.BytesIO(file_bytes), skiprows=OT_SKIP_ROWS)
+    sheets = get_excel_sheets(file_bytes)
+    matched = next((s for s in sheets if s.strip().lower() == OT_SHEET_NAME.lower()), None)
+    if matched is None:
+        raise ValueError(
+            f"Sheet '{OT_SHEET_NAME}' not found in the uploaded file. "
+            f"Available sheets: {', '.join(sheets) if sheets else '(none)'}"
+        )
+    return pd.read_excel(
+        io.BytesIO(file_bytes),
+        sheet_name=matched,
+        skiprows=OT_SKIP_ROWS,
+        engine="openpyxl",
+    )
+
+
 def parse_datetimes(df: pd.DataFrame, login_col: str, logout_col: str) -> pd.DataFrame:
     df = df.copy()
     df[login_col]  = pd.to_datetime(df[login_col],  errors="coerce", dayfirst=False)
@@ -1648,22 +1672,15 @@ if "ot_bytes" in st.session_state:
         st.rerun()
     _otc2.caption(f"📄 Using: **{st.session_state['ot_name']}**")
 
-    _ot_sheets = get_excel_sheets(st.session_state["ot_bytes"])
-    if _ot_sheets:
-        _enroll_default = next(
-            (s for s in _ot_sheets if "enrollment" in s.lower() or "enroll" in s.lower()),
-            _ot_sheets[0],
-        )
-        ot_sheet = st.selectbox(
-            "📋 Sheet to use",
-            _ot_sheets,
-            index=_ot_sheets.index(_enroll_default),
-            key="ot_sheet_sel",
-        )
-        ot_raw = load_file_sheet(st.session_state["ot_bytes"], st.session_state["ot_name"], ot_sheet)
-    else:
-        ot_raw = load_file(st.session_state["ot_bytes"], st.session_state["ot_name"])
-    st.success(f"OT Schedule loaded — {len(ot_raw)} rows, {len(ot_raw.columns)} columns")
+    try:
+        ot_raw = load_ot_schedule(st.session_state["ot_bytes"], st.session_state["ot_name"])
+    except ValueError as _ot_err:
+        st.error(str(_ot_err))
+        st.stop()
+    st.success(
+        f"OT Schedule loaded from **'{OT_SHEET_NAME}'** — "
+        f"{len(ot_raw)} rows, {len(ot_raw.columns)} columns"
+    )
 
     with st.expander("Preview OT Schedule", expanded=False):
         st.dataframe(ot_raw, use_container_width=True)
